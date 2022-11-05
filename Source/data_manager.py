@@ -18,7 +18,7 @@ class Data_Manager:
         """extract a dataset of the given experiments from the main database
 
         experiments: list of strings in the template of 'subject_session_position' use * in one of the fields to
-        indicate all
+        indicate all. e.g. ['001_1_*', '002_*_*', '003_*_1']
         include_synthetics: boolean, declare inclusion of synthetic data in the dataset"""
         datasets_lists = [subject.get_datasets(experiments, include_synthetics) for subject in self.subjects]
         datasets = [dataset for datasets in datasets_lists for dataset in datasets]  # flatten datasets list

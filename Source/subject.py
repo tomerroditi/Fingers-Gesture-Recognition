@@ -15,7 +15,7 @@ class Subject:
 
     def get_datasets(self, experiments: list, include_synthetics = False) -> list[TensorDataset]:
         """extract a dataset of the given experiments from the subject"""
-        datasets = [rec.dataset for rec in self.recordings if rec.experiment in experiments]
+        datasets = [rec.dataset for rec in self.recordings if any([rec.match_experiment(exp) for exp in experiments])]
         return datasets
 
 

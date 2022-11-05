@@ -9,18 +9,37 @@ from pipelines import Data_Pipeline
 # this might be a problem when we are going to work with the whole database.
 # we need to think how we are going to handle this issue. a possible solution is to save the segments and features in
 # files and load them when needed. this way we can work with the whole database without memory issues.
+# another solution is to generate the objects on the fly, and not save them (implement in Data Manager).
+# this way we can work with the whole database without memory issues.
+# we need to think about the pros and cons of each solution (feel free to add more):
+# saving the segments and features in files:
+#   pros:
+#       1. we can work with the whole database without memory issues.
+#       2. we process the data once, and then we can use it as many times as we want.
+#   cons:
+#       1. we need to implement a mechanism to save and fetch the data from the files.
+# generate data on the fly:
+#   pros:
+#       1. the implementation is simpler and pretty straight forward (using generators).
+#   cons:
+#       1. we need to process the data every time we want to use it.
+#
+# IMO the second solution is currently better, since we are still in the development stage, and we need to change
+# the code a lot. once we are done with the development, we can implement the first solution. this way when we will
+# start running lots of experiments we will not need to process the data every time.
+
 
 class Recording:
     def __init__(self, file_path: str, data_pipeline: Data_Pipeline):
         self.file_path = file_path
-        self.experiment = []  # str, "subject_session_position" - to be extracted from the file path
+        self.experiment = file_path_to_experiment(file_path)  # str, "subject_session_position" template
         self.data_pipeline = data_pipeline  # stores all preprocessing parameters
         self.signal, self.annotations = load_file(file_path)
         self.segments = []  # list of tuples (segment: np.array, label)
         self.subsegments = []  # list of strings
         self.labels = []  # list of strings
         self.features = []  # np.arrays
-        self.dataset = []   # torch dataset
+        self.dataset = []   # torch dataset, containing the features and labels of the object
 
     def filter_signal(self):
         """filter the signal according to the data pipeline"""
@@ -60,12 +79,42 @@ class Recording:
             labels = torch.cat((labels, torch.Tensor(synth_labels)))
         return TensorDataset(data, labels)
 
+    def match_experiment(self, experiment: str) -> bool:
+        """check if the experiment matches the recording file"""
+        rec_exp = self.experiment.split('_')
+        curr_exp = experiment.split('_')
+        if curr_exp[0] == rec_exp[0] or curr_exp[0] == '*':
+            if curr_exp[1] == rec_exp[1] or curr_exp[1] == '*':
+                if curr_exp[2] == rec_exp[2] or curr_exp[2] == '*':
+                    return True
+        return False
+
 
 def load_file(filename: str) -> (np.array, list[tuple]):
     """this function loads a file and returns the signal and the annotations
     in the future we might insert here the handling of merging files of part1 part2 (etc.) to one file"""
     signal = mne.io.read_raw_edf(filename, preload = True, stim_channel = 'auto').load_data().get_data()
     annotations = mne.read_annotations(filename)  # get annotations object from the file
-    annotations = [(onset, description) for onset, description in zip(annotations.onset, annotations.descripiton)
-                   if 'Start' in description or 'Release' in description]
+    annotations = [(onset, description) for onset, description in zip(annotations.onset, annotations.description)
+                   if 'Start_' in description or 'Release_' in description]
     return signal, annotations
+
+
+def file_path_to_experiment(file_path) -> str:
+    """extract the experiment from the file path
+    Currently the file name is in the form of: 'GR_pos#_###_S#_Recording_00_SD_edited.edf'
+    and we want to extract the experiment in the form of: 'subject_session_position'"""
+    file_name_parts = file_path.split('\\')[-1].split('_')
+    for name in file_name_parts:
+        if name[0] == 'S' and name[1] != 'D':
+            session = name[1:]
+        elif name[0:3] == 'pos':
+            position = name[3:]
+        elif len(name) == 3:
+            subject = name
+    try:
+        experiment = f'{subject}_{session}_{position}'
+    except NameError:
+        print(f'Error: could not extract experiment from file path: {file_path}')
+        experiment = ''
+    return experiment
