@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import TensorDataset
-from pipelines import Data_Pipeline
+from .pipelines import Data_Pipeline
 
 # we need to consider memory issues here since we are going to work with large files, and create multiple objects.
 # this might be a problem when we are going to work with the whole database.
@@ -32,14 +32,13 @@ from pipelines import Data_Pipeline
 class Recording:
     def __init__(self, file_path: str, data_pipeline: Data_Pipeline):
         self.file_path = file_path
-        self.experiment = file_path_to_experiment(file_path)  # str, "subject_session_position" template
+        self.experiment = self.file_path_to_experiment(file_path)  # str, "subject_session_position" template
         self.data_pipeline = data_pipeline  # stores all preprocessing parameters
-        self.signal, self.annotations = load_file(file_path)
-        self.segments = []  # list of tuples (segment: np.array, label)
-        self.subsegments = []  # list of strings
-        self.labels = []  # list of strings
-        self.features = []  # np.arrays
-        self.dataset = []   # torch dataset, containing the features and labels of the object
+        self.signal, self.annotations = self.load_file(file_path)  # np.array, list[(float, str]
+        self.segments = []  # list[(segment: np.array, label)]
+        self.subsegments = []  # np.array, stacked on dim 0
+        self.features = []  # np.arrays, stacked on dim 0
+        self.labels = []  # np.array of strings
 
     def filter_signal(self):
         """filter the signal according to the data pipeline"""
@@ -67,17 +66,17 @@ class Recording:
         """extract features from the subsegments"""
         pass
 
-    def create_dataset(self, include_synthetics = False) -> TensorDataset:
+    def get_dataset(self, include_synthetics = False) -> (np.array, np.array):
         """extract a dataset of the given recording file"""
-        data = torch.Tensor(self.features)
-        labels = torch.Tensor(self.labels)
+        data = self.features
+        labels = self.labels
 
         if include_synthetics:
             synth_subsegments, synth_labels = self.create_synthetic_subsegments()
             synth_features = self.extract_features(synth_subsegments)
-            data = torch.cat((data, torch.Tensor(synth_features)), dim=0)
-            labels = torch.cat((labels, torch.Tensor(synth_labels)))
-        return TensorDataset(data, labels)
+            data = np.concatenate((data, synth_features), axis = 0)
+            labels = np.concatenate((labels, synth_labels), axis = 0)
+        return data, labels
 
     def match_experiment(self, experiment: str) -> bool:
         """check if the experiment matches the recording file"""
@@ -89,32 +88,32 @@ class Recording:
                     return True
         return False
 
+    @staticmethod
+    def load_file(filename: str) -> (np.array, list[(float, str)]):
+        """this function loads a file and returns the signal and the annotations
+        in the future we might insert here the handling of merging files of part1 part2 (etc.) to one file"""
+        signal = mne.io.read_raw_edf(filename, preload = True, stim_channel = 'auto').load_data().get_data()
+        annotations = mne.read_annotations(filename)  # get annotations object from the file
+        annotations = [(onset, description) for onset, description in zip(annotations.onset, annotations.description)
+                       if 'Start_' in description or 'Release_' in description]
+        return signal, annotations
 
-def load_file(filename: str) -> (np.array, list[tuple]):
-    """this function loads a file and returns the signal and the annotations
-    in the future we might insert here the handling of merging files of part1 part2 (etc.) to one file"""
-    signal = mne.io.read_raw_edf(filename, preload = True, stim_channel = 'auto').load_data().get_data()
-    annotations = mne.read_annotations(filename)  # get annotations object from the file
-    annotations = [(onset, description) for onset, description in zip(annotations.onset, annotations.description)
-                   if 'Start_' in description or 'Release_' in description]
-    return signal, annotations
-
-
-def file_path_to_experiment(file_path) -> str:
-    """extract the experiment from the file path
-    Currently the file name is in the form of: 'GR_pos#_###_S#_Recording_00_SD_edited.edf'
-    and we want to extract the experiment in the form of: 'subject_session_position'"""
-    file_name_parts = file_path.split('\\')[-1].split('_')
-    for name in file_name_parts:
-        if name[0] == 'S' and name[1] != 'D':
-            session = name[1:]
-        elif name[0:3] == 'pos':
-            position = name[3:]
-        elif len(name) == 3:
-            subject = name
-    try:
-        experiment = f'{subject}_{session}_{position}'
-    except NameError:
-        print(f'Error: could not extract experiment from file path: {file_path}')
-        experiment = ''
-    return experiment
+    @staticmethod
+    def file_path_to_experiment(file_path) -> str:
+        """extract the experiment from the file path
+        Currently the file name is in the form of: 'GR_pos#_###_S#_Recording_00_SD_edited.edf'
+        and we want to extract the experiment in the form of: 'subject_session_position'"""
+        file_name_parts = file_path.split('\\')[-1].split('_')
+        for name in file_name_parts:
+            if name[0] == 'S' and name[1] != 'D':
+                session = name[1:]
+            elif name[0:3] == 'pos':
+                position = name[3:]
+            elif len(name) == 3:
+                subject = name
+        try:
+            experiment = f'{subject}_{session}_{position}'
+        except NameError:
+            print(f'Error: could not extract experiment from file path: {file_path}')
+            experiment = ''
+        return experiment

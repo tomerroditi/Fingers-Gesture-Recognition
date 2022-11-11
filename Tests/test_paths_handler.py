@@ -1,6 +1,6 @@
 from pathlib import Path
 import pytest
-from Source.Paths_Handler import Paths_Handler
+from Source.paths_handler import Paths_Handler
 
 
 @pytest.fixture(scope = "module")

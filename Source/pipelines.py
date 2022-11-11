@@ -13,3 +13,8 @@ class Data_Pipeline:
     normalization_quantiles: tuple = (0.01, 0.99)
 
 
+@dataclass
+class Model_Pipeline:
+    """this class is a dataclass that holds the parameters for model training"""
+    def __init__(self, model_type: str, model_params: dict, train_params: dict):
+        self.model_type = model_type
