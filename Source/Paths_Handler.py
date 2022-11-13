@@ -16,7 +16,7 @@ class Paths_Handler:
         is_list = [isinstance(arg, list) for arg in args]
         if any(is_list):
             if not all(is_list) or not len(subjects) == len(positions) == len(sessions):
-                raise PathConstructionError('''you must supply evenly length lists of subjects, positions and sessions!
+                raise PathConstructionError('''you must supply evenly length lists of subjects, positions and sessions!!
                                                You may as well use a single int value for each argument''')
 
             for i in range(len(subjects)):
