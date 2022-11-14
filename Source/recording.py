@@ -34,7 +34,8 @@ class Recording:
         self.file_path = file_path
         self.experiment = self.file_path_to_experiment(file_path)  # str, "subject_session_position" template
         self.data_pipeline = data_pipeline  # stores all preprocessing parameters
-        self.signal, self.annotations = self.load_file(file_path)  # np.array, list[(float, str]
+        self.signal = []  # np.array, the signal
+        self.annotations = [] # list[(float, str], the annotations, time and description
         self.segments = []  # list[(segment: np.array, label)]
         self.subsegments = []  # np.array, stacked on dim 0
         self.features = []  # np.arrays, stacked on dim 0
@@ -88,15 +89,14 @@ class Recording:
                     return True
         return False
 
-    @staticmethod
-    def load_file(filename: str) -> (np.array, list[(float, str)]):
+    def load_file(self, filename: str) -> (np.array, list[(float, str)]):
         """this function loads a file and returns the signal and the annotations
         in the future we might insert here the handling of merging files of part1 part2 (etc.) to one file"""
         signal = mne.io.read_raw_edf(filename, preload = True, stim_channel = 'auto').load_data().get_data()
         annotations = mne.read_annotations(filename)  # get annotations object from the file
         annotations = [(onset, description) for onset, description in zip(annotations.onset, annotations.description)
                        if 'Start_' in description or 'Release_' in description]
-        return signal, annotations
+        self.signal, self.annotations = signal, annotations
 
     @staticmethod
     def file_path_to_experiment(file_path) -> str:
