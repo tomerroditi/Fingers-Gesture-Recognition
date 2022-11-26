@@ -1,5 +1,5 @@
 def reset(func):
-    def wrapper(*args, **kwargs):
+    def wrapper(func, *args, **kwargs):
         func(*args, **kwargs)
-        args[0]._reset()
+        func._reset()
     return wrapper

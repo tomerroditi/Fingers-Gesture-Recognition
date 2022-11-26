@@ -7,16 +7,15 @@ import numpy as np
 
 class Data_Manager:
 
-    def __init__(self, subjects_num: list, data_pipeline: Data_Pipeline):
+    def __init__(self, subjects_num: list[int], data_pipeline: Data_Pipeline):
         self.subjects_num = subjects_num
-        self.subjects = (Subject(num, data_pipeline) for num in subjects_num)
+        self.subjects = [Subject(num, data_pipeline) for num in subjects_num]
         self.data_pipeline = data_pipeline
 
     def _reset(self):
         """reset the subjects generator"""
         self.subjects = (Subject(num, self.data_pipeline) for num in self.subjects_num)
 
-    @reset
     def data_info(self):
         """print the data info (subjects, sessions, positions, etc.)"""
         all_notation = ['*_*_*']
@@ -24,8 +23,7 @@ class Data_Manager:
         experiments_in_datasets = [exp for exp_list in experiments_in_datasets for exp in exp_list]  # flatten list
         print(f'Experiments in datasets: {experiments_in_datasets}')
 
-    @reset
-    def get_dataset(self, experiments: str | list, include_synthetics = False) -> (ConcatDataset, list[str]):
+    def get_dataset(self, experiments: str or list, include_synthetics = False) -> (np.array, np.array):
         """
         extract a dataset of the given experiments from the main database
 
@@ -33,13 +31,13 @@ class Data_Manager:
         indicate all. e.g. ['001_1_*', '002_*_*', '003_*_1']
         include_synthetics: boolean, declare inclusion of synthetic data in the dataset
         """
-        experiments = list(experiments)  # make sure it's in list format
+        if isinstance(experiments, str):
+            experiments = [experiments]
 
         experiments_in_datasets = [subject.get_my_experiments(experiments) for subject in self.subjects]
         experiments_in_datasets = [exp for exp_list in experiments_in_datasets for exp in exp_list]  # flatten list
 
-        datasets_lists = [subject.get_datasets(experiments, include_synthetics) for subject in self.subjects]
-        datasets = [dataset for datasets in datasets_lists for dataset in datasets]  # flatten list
+        datasets = [subject.get_datasets(experiments, include_synthetics) for subject in self.subjects]
 
         data = np.concatenate(tuple([data for data, labels in datasets]), axis = 0)
         labels = np.concatenate(tuple([labels for data, labels in datasets]), axis = 0)
