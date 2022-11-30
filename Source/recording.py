@@ -79,7 +79,7 @@ class Recording:
 
     @staticmethod
     def make_subsegment(window_len, action_data):
-        """make a subsegment of the segments"""
+        """Make a subsegment of the segments"""
         # note that subsegments should be stacked on dim 0
         # ! window len = number of rows, meaning we need to convert it from sec/samples
 
