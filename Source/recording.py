@@ -2,12 +2,12 @@ import mne
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import torch
-from torch.utils.data import TensorDataset
 from .pipelines import Data_Pipeline
 from math import floor
 from sklearn.cross_validation import train_test_split
 from hmmlearn import hmm
+from sklearn.model_selection import train_test_split
+
 
 # we need to consider memory issues here since we are going to work with large files, and create multiple objects.
 # this might be a problem when we are going to work with the whole database.
@@ -52,6 +52,28 @@ class Recording:
         self.EMG_channels.notch_filter(freqs=frequencies[0])
         self.EMG_channels.filter(l_freq=frequencies[1], h_freq=frequencies[2], method='iir')
 
+    def heatmap_visualization(self, features: np.array):
+        # If the channels are not arranged in chronological order,
+        # should get the location and rearrange them here.
+        heatmaps = [np.reshape(segment, (4, 4)) for segment in features]
+        gestures_num = len(self.labels.unique())
+        repetitions = len(features) / gestures_num
+        fig, axs = plt.subplots(gestures_num, repetitions + 1)
+        for ac in range(len(heatmaps)):
+            im = axs[int(ac / repetitions), ac % repetitions + 1].imshow(heatmaps[ac], cmap='hot')
+        for i in range(gestures_num):
+            for j in range(repetitions + 1):
+                axs[i, j].set_xticks([])
+                axs[i, j].set_yticks([])
+            axs[i, 0].text(-0.5, 0.5, self.labels.unique()[i], fontsize=18)
+            axs[i, 0].spines['top'].set_visible(False)
+            axs[i, 0].spines['right'].set_visible(False)
+            axs[i, 0].spines['bottom'].set_visible(False)
+            axs[i, 0].spines['left'].set_visible(False)
+        cbar = fig.colorbar(im, ax=axs.ravel().tolist())
+        cbar.ax.tick_params(labelsize=18)
+        plt.show()
+
     def separate_accelerometer_channels(self):
         """separate accelerometer data from EMG channels data"""
         self.acc_channels = self.raw_signal.copy().pick_channels(
@@ -88,53 +110,34 @@ class Recording:
         return action_data
 
     @staticmethod
-    def split_data_for_synthetic(action):
-        # they split the val from the train, here is different
-        flat_list = np.array([item for sublist in action for item in sublist])
-        action_train, action_test = train_test_split(flat_list, test_size=0.5)
-        action_test, action_val = train_test_split(action_test, test_size=100/3)
+    def split_data_for_synthetic(action_features: np.array):
+        """spilt action's features into 50% train, 33.3% test and 16.6% validation sets"""
+        action_train, action_test = train_test_split(action_features, test_size=0.5)
+        action_test, action_val = train_test_split(action_test, test_size=1 / 3)
         return action_train, action_test, action_val
 
     def create_synthetic_subsegments(self, comp_num, iterations_num) -> (np.array, list[str]):
-        # not finished, need to test before.
-        # they not used test and validation data
-
         """create synthetic data (subsegments) from the given recording file segments using HMM"""
-        features_train, features_test, features_val, label_train, label_test, label_val = []
-        for i in range(0,len(self.features)):
-            [action_train, action_test, action_val] = self.split_data_for_synthetic(self, self.features[i])
-            features_train.append(action_train)
-            features_test.append(action_test)
-            features_val.append(action_val)
-            label_train.append([self.actions_list[i]]*action_train.shape[0])  # need to check dimension
-            label_test.append([self.actions_list[i]]*action_test.shape[0])  # need to check dimension
-            label_val.append([self.actions_list[i]]*features_val.shape[0])  # need to check dimension
 
-        models = []
-        for i in range(len(self.actions_list)):
-            #X = np.concatenate([train_data[repetitions*i+j,:,:] for j in [0,1,2,3,4,5]]) - why??
-            model = hmm.GaussianHMM(n_components=4, covariance_type="tied", n_iter=10)
-            lengths = [features_train.shape[1] for j in range(6)]  # need to check dimension, the sum of this sould be n_sample. doesnt make sense
-            # x should be in the form of (n_samples, n_features=16)
-            model.fit(features_train, lengths)
-            models.append(model)
         test_res = []
-        for s in range(len(self.actions_list) * 2):
-            test_res.append(np.argmax(np.array([models[i].score(features_test[s, :, :]) for i in range(len(self.actions_list))])))
-
-        acc = np.mean(np.array(test_res) == label_test) # mean of all models
-
-        generated_data, generated_labels = []
-        for i in range(len(self.actions_list)):
+        label_test = []
+        generated_data = []
+        generated_labels = []
+        for action_name in self.labels.unique():
+            indices = [i for i, x in enumerate(self.labels) if x == action_name]
+            [features_train, features_test, features_val] = self.split_data_for_synthetic(self, self.features[indices])
+            label_test.append(action_name * features_test.shape[0])
+            model = hmm.GaussianHMM(n_components=4, covariance_type="tied", n_iter=10)
+            lengths = [len(features_train)//6 for j in range(6)]
+            model.fit(features_train[:sum(lengths)], lengths)
+            test_res.append(np.argmax(np.array(model.score(features_test))))
             for j in range(6):
-                # they loaded model from file, maybe is eas the best one from the trials.
-                X, Z = model.sample(11) # should decide if 11 (supposed to be min window)
+                X, Z = model.sample(11)  # should decide if 11 (supposed to be min window)
                 generated_data.append(X)
-            labels = [self.actions_list[i]] * (6*11)  # how they know that it match this action?
-            generated_labels.append(labels)
+                generated_labels.append(model * (6 * 11))
 
-        generated_data = np.concatenate((features_train, generated_data))
-        generated_labels = np.concatenate((label_train.flatten(), generated_labels.flatten())) # check dimensions, if flatten needed
+        acc = np.mean(np.array(test_res) == label_test)  # mean of all models on all the data
+        return generated_labels, generated_data
 
     def preprocess_segments(self, frequencies, window_len) -> np.array:
         """preprocess the segments according to the data pipeline"""
@@ -149,7 +152,7 @@ class Recording:
 
         # second segmentation - each action (& repetition) by window length
         for action in self.segments:
-            self.subsegments.append(self.make_subsegment(window_len, action)) # maybe will need to change to np.append
+            self.subsegments.append(self.make_subsegment(window_len, action))  # maybe will need to change to np.append
             self.subsegments = np.array(self.subsegments)
 
         for action in self.subsegments:
@@ -163,7 +166,7 @@ class Recording:
             final_subsegment = []
             if ~use_acc:
                 repetition = [subsegment[:, 3:] for subsegment in repetition]
-            subsegment_rms = [np.sqrt(np.mean(subsegment[:] ** 2,axis=0)) for subsegment in repetition]
+            subsegment_rms = [np.sqrt(np.mean(subsegment[:] ** 2, axis=0)) for subsegment in repetition]
             subsegment_rms = subsegment_rms / np.max(np.absolute(subsegment_rms))
             final_subsegment.append(subsegment_rms)
         return final_subsegment
