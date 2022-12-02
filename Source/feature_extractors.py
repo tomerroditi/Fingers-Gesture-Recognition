@@ -14,7 +14,7 @@ class RMS_Feature_Extractor(Feature_Extractor):
         this is last year's method"""
         emg_data, acc_data = segments
         features = np.sqrt(np.mean(np.square(emg_data), axis=2))
-        features = np.reshape(features, (features.shape[0], 4, 4))
+        features = features / np.max(np.absolute(features))  # normalization
         return features
 
 

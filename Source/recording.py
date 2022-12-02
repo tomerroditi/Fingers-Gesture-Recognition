@@ -1,12 +1,12 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import torch
-from torch.utils.data import TensorDataset
 from .pipelines import Data_Pipeline
 from pathlib import Path
 from math import floor
-from .feature_extractors import Feature_Extractor, build_feature_extractor
+from .feature_extractors import build_feature_extractor
+import hmmlearn.hmm as hmm
+from sklearn.model_selection import train_test_split
 import mne
 mne.set_log_level('WARNING')  # disable mne function's printing except warnings
 
@@ -76,7 +76,6 @@ class Recording:
         self.raw_edf_acc = raw_edf.copy().pick_channels({"Accelerometer_X", "Accelerometer_Y", "Accelerometer_Z"})
         self.raw_edf_emg = raw_edf.copy().drop_channels({"Accelerometer_X", "Accelerometer_Y", "Accelerometer_Z"})
 
-        # TODO: call the annotations from the loaded raw_edf file and not from the file name, why? reconsider with gal
         # TODO: add a validation to the annotations, check that the annotations are in the right order - start, stop,
         #  start, stop, etc. and that each consecutive start, stop annotations are of the same gesture.
         annotations = mne.read_annotations(filename)  # get annotations object from the file
@@ -127,6 +126,49 @@ class Recording:
                 annotations_data.append((emg_data, acc_data, label))
         return annotations_data
 
+    def heatmap_visualization(self, features: np.array):
+        # If the channels are not arranged in chronological order,
+        # should get the location and rearrange them here.
+
+        # it is better if we would use self.features instead of passing features into the function.
+        heatmaps = [np.reshape(segment, (4, 4)) for segment in features]  # np iterates over dim 0
+        gestures_num = len(self.labels.unique())
+        repetitions = len(features) / gestures_num  # be more concise with how you call variables, it's not clear what
+        # repetitions var is from its name. in other function it was used for the data of the gesture. this makes it
+        # harder to follow the code. you could use num_repetitions instead (same with gesture_num -> num_gestures)
+        fig, axs = plt.subplots(gestures_num, repetitions + 1)
+        # you are assuming that the gestures are ordered by labels, and that each gesture has the same number of
+        # repetitions. these are things we should avoid assuming cause in the future it's not likely to be true.
+        # the same goes for how you assumed this in your segment data function which is why I think we should stick with
+        # my implementation (of the segmentation) that is more general.
+        # so for now this function might be fine, but we need to change it for a more general solution.
+        for ac in range(len(heatmaps)):
+            im = axs[int(ac / repetitions), ac % repetitions + 1].imshow(heatmaps[ac], cmap='hot')
+        for i in range(gestures_num):
+            # this is alot of code for a simple subplot. you can use fig = plt.figure, and then add subplots with
+            # fig.add_subplot like this:
+            # fig = plt.figure()
+            # fig.add_subplot(num_gestures, num_repetitions, 1)
+            # for i in range(num_gestures):
+            #     for j in range(num_repetitions):
+            #         ax = fig.add_subplot(num_gestures, num_repetitions, i * num_repetitions + j # index)
+            #         ax.plot(the_data)  # any plotting type you need here
+            #         ax.set_title(title), etc.
+            # fig.show()
+            # this way you are using the simplified API of matplotlib, and you can add more subplots easily without
+            # having to set the size of the figure or any other annoying parameters.
+            for j in range(repetitions + 1):
+                axs[i, j].set_xticks([])
+                axs[i, j].set_yticks([])
+            axs[i, 0].text(-0.5, 0.5, self.labels.unique()[i], fontsize=18)
+            axs[i, 0].spines['top'].set_visible(False)
+            axs[i, 0].spines['right'].set_visible(False)
+            axs[i, 0].spines['bottom'].set_visible(False)
+            axs[i, 0].spines['left'].set_visible(False)
+        cbar = fig.colorbar(im, ax=axs.ravel().tolist())
+        cbar.ax.tick_params(labelsize=18)
+        plt.show()
+
     def segment_data_discrete(self) -> ((np.array(np.float16), np.array(np.float16)), np.array(str)):
         """discrete segmentation of the data according to the annotations. this is to repeat last year results.        use float16 dtype to save memory"""
         segment_length_emg = floor(self.pipeline.segment_length_sec * self.pipeline.emg_sample_rate)
@@ -162,10 +204,6 @@ class Recording:
     def normalize_features(self) -> np.array:
         raise NotImplementedError
 
-    def create_synthetic_subsegments(self) -> (np.array, list[str]):
-        """create synthetic data (subsegments) from the given recording file segments using HMM"""
-        raise NotImplementedError
-
     def get_dataset(self, include_synthetics = False) -> (np.array, np.array):
         """extract a dataset of the given recording file"""
         if self.features is None:
@@ -175,12 +213,47 @@ class Recording:
         labels = self.labels
 
         if include_synthetics:
-            raise NotImplementedError('synthetic data is not implemented yet')
-            synth_subsegments, synth_labels = self.create_synthetic_subsegments()
-            synth_features = self.extract_features(synth_subsegments)
-            data = np.concatenate((data, synth_features), axis = 0)
+            synth_data, synth_labels = self.create_synthetic_data()
+            data = np.concatenate((data, synth_data), axis = 0)
             labels = np.concatenate((labels, synth_labels), axis = 0)
         return data, labels
+
+    def create_synthetic_data(self) -> (np.array, list[str]):
+        """create synthetic data (features) from the extracted features using HMM"""
+
+        test_res = []
+        label_test = []
+        generated_data = []
+        generated_labels = []
+        for action_name in self.labels.unique():
+            # it better if you write these lines like this:
+            # curr_action_features = self.features[self.labels == action_name]
+            # [features_train, features_test, features_val] = self.split_data_for_synthetic(self, curr_action_features)
+            # this is much more readable, and you don't need to use the index directly
+            indices = [i for i, x in enumerate(self.labels) if x == action_name]
+            [features_train, features_test, features_val] = self.split_data_for_synthetic(self, self.features[indices])
+            # you can use the same trick here
+            # curr_action_labels = self.labels[self.labels == action_name]
+            # label_test.append(curr_action_labels)
+            label_test.append(action_name * features_test.shape[0])
+            model = hmm.GaussianHMM(n_components=4, covariance_type="tied", n_iter=10)
+            lengths = [len(features_train)//6 for j in range(6)]  # it's better to use a variable instead of a number
+            model.fit(features_train[:sum(lengths)], lengths)
+            test_res.append(np.argmax(np.array(model.score(features_test))))
+            for j in range(6):
+                X, Z = model.sample(11)  # should decide if 11 (supposed to be min window)
+                generated_data.append(X)
+                generated_labels.append(model * (6 * 11))  # are you sure these are labels? im pretty sure this will prompt an error
+        # why do we need this?
+        acc = np.mean(np.array(test_res) == label_test)  # mean of all models on all the data
+        return generated_data, generated_labels
+
+    @staticmethod
+    def split_data_for_synthetic(action_features: np.array):
+        """spilt action's features into 50% train, 33.3% test and 16.6% validation sets"""
+        action_train, action_test = train_test_split(action_features, test_size=0.5)
+        action_test, action_val = train_test_split(action_test, test_size=1 / 3)  # we are not using the validation set, so why do we need it?
+        return action_train, action_test, action_val
 
     def match_experiment(self, experiment: str) -> bool:
         """check if the experiment matches the recording file"""
