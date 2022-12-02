@@ -8,7 +8,7 @@ from pathlib import Path
 from math import floor
 from .feature_extractors import Feature_Extractor, build_feature_extractor
 import mne
-mne.set_log_level('WARNING')
+mne.set_log_level('WARNING')  # disable mne function's printing except warnings
 
 # we need to consider memory issues here since we are going to work with large files, and create multiple objects.
 # this might be a problem when we are going to work with the whole database.
@@ -64,9 +64,8 @@ class Recording:
         try:
             experiment = f'{subject}_{session}_{position}'
         except NameError:
-            print(f'Error: could not extract experiment name from file path: {file_path}.'
+            raise NameError(f'Error: could not extract experiment name from file path: {file_path}.'
                   f'pls check the file name format.')
-            experiment = ''
         return experiment
 
     def load_file(self):

@@ -13,3 +13,5 @@ print(dm.data_info())
 # %%
 dataset = dm.get_dataset(experiments='*_*_*', include_synthetics=False)
 
+# %%
+small_dataset = dm.get_dataset(experiments='*_1_1', include_synthetics=False)
