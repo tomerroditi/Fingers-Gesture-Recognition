@@ -22,6 +22,7 @@ class Data_Manager:
         experiments_in_datasets = [subject.get_my_experiments(all_notation) for subject in self.subjects]
         experiments_in_datasets = [exp for exp_list in experiments_in_datasets for exp in exp_list]  # flatten list
         print(f'Experiments in datasets: {experiments_in_datasets}')
+        print('Experiments format is: subject_session_position')
 
     def get_dataset(self, experiments: str or list, include_synthetics = False) -> (np.array, np.array):
         """
@@ -37,6 +38,7 @@ class Data_Manager:
         experiments_in_datasets = [subject.get_my_experiments(experiments) for subject in self.subjects]
         experiments_in_datasets = [exp for exp_list in experiments_in_datasets for exp in exp_list]  # flatten list
 
+        # TODO: create a progress bar for this loop
         datasets = [subject.get_datasets(experiments, include_synthetics) for subject in self.subjects]
 
         data = np.concatenate(tuple([data for data, labels in datasets]), axis = 0)

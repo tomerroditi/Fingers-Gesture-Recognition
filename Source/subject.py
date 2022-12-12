@@ -40,6 +40,7 @@ class Subject:
         if isinstance(experiments, str):
             experiments = [experiments]
 
+        # TODO: create a progress bar for this loop
         datasets = [rec.get_dataset(include_synthetics) for rec in self.recordings if
                     any([rec.match_experiment(exp) for exp in experiments])]
 

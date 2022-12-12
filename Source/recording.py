@@ -43,7 +43,7 @@ class Recording:
         self.raw_edf_acc = None  # mne.io.edf.edf.RawEDF object with accelerometer channels only
         self.annotations = None  # list[(float, str], the annotations, time and description
         self.annotations_data = None  # list[(np.array, np.array, str)], EMG data, accelerometer data, gesture label
-        self.segments = None  # list[(np.array, np.array)], EMG data, accelerometer data, gesture label
+        self.segments = None  # list[(np.array, np.array)], EMG data, accelerometer data
         self.labels = None  # np.array(str), the labels of the segments
         self.features = None  # np.array, stacked on dim 0
         self.segments_labels = None  # np.array of strings
@@ -170,7 +170,10 @@ class Recording:
         plt.show()
 
     def segment_data_discrete(self) -> ((np.array(np.float16), np.array(np.float16)), np.array(str)):
-        """discrete segmentation of the data according to the annotations. this is to repeat last year results.        use float16 dtype to save memory"""
+        """
+        discrete segmentation of the data according to the annotations. this is to repeat last year results.
+        use float16 dtype to save memory
+        """
         segment_length_emg = floor(self.pipeline.segment_length_sec * self.pipeline.emg_sample_rate)
         segment_length_acc = floor(self.pipeline.segment_length_sec * self.pipeline.acc_sample_rate)
 
@@ -178,11 +181,12 @@ class Recording:
         segments_acc = np.empty(shape=(0, 3, segment_length_acc), dtype=np.float16)
         labels = np.empty(shape=(0,), dtype=str)
         for emg_data, acc_data, label in self.annotations_data:
+            # emg segmentation and labels creation
             for i in range(0, emg_data.shape[1] - segment_length_emg, segment_length_emg):
                 curr_emg_segment = emg_data[:, i:i + segment_length_emg][np.newaxis, :, :]
                 segments_emg = np.vstack((segments_emg, curr_emg_segment))
                 labels = np.append(labels, label)
-
+            # acc segmentation
             for i in range(0, acc_data.shape[1] - segment_length_acc, segment_length_acc):
                 curr_acc_segment = acc_data[:, i:i + segment_length_acc][np.newaxis, :, :]  # need to add a new axis
                 segments_acc = np.vstack((segments_acc, curr_acc_segment))
@@ -231,7 +235,7 @@ class Recording:
             # [features_train, features_test, features_val] = self.split_data_for_synthetic(self, curr_action_features)
             # this is much more readable, and you don't need to use the index directly
             indices = [i for i, x in enumerate(self.labels) if x == action_name]
-            [features_train, features_test, features_val] = self.split_data_for_synthetic(self, self.features[indices])
+            [features_train, features_test, features_val] = self.split_data_for_synthetic(self.features[indices])
             # you can use the same trick here
             # curr_action_labels = self.labels[self.labels == action_name]
             # label_test.append(curr_action_labels)
@@ -243,7 +247,7 @@ class Recording:
             for j in range(6):
                 X, Z = model.sample(11)  # should decide if 11 (supposed to be min window)
                 generated_data.append(X)
-                generated_labels.append(model * (6 * 11))  # are you sure these are labels? im pretty sure this will prompt an error
+                generated_labels.append(action_name * (6 * 11))  # are you sure these are labels? im pretty sure this will prompt an error
         # why do we need this?
         acc = np.mean(np.array(test_res) == label_test)  # mean of all models on all the data
         return generated_data, generated_labels
@@ -259,6 +263,11 @@ class Recording:
         """check if the experiment matches the recording file"""
         rec_exp = self.experiment.split('_')
         curr_exp = experiment.split('_')
+
+        # add zeros in case the subject num is less than 3 digits
+        while len(curr_exp[0]) < 3 and curr_exp[0] != '*':
+            curr_exp[0] = '0' + curr_exp[0]
+
         if curr_exp[0] == rec_exp[0] or curr_exp[0] == '*':
             if curr_exp[1] == rec_exp[1] or curr_exp[1] == '*':
                 if curr_exp[2] == rec_exp[2] or curr_exp[2] == '*':
