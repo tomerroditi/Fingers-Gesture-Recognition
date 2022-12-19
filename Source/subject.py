@@ -16,9 +16,32 @@ class Subject:
     def load_recordings(self, load_data=True):
         """load the recordings from the files"""
         files = self.my_files()
-        recordings = [Recording(file, self.data_pipeline) for file in files]
-        if load_data: [rec.load_file() for rec in recordings]
+        files = self.experiment_files(files)
+        recordings = [Recording(paths, self.data_pipeline) for paths in files]
+        if load_data:
+            [rec.load_file() for rec in recordings]
         return recordings
+
+    @staticmethod
+    def experiment_files(files: list[Path]) -> list[list[Path]]:
+        """group the files by experiment, some experiment has several files, each has a different part of the
+        experiment"""
+        files_by_exp = []
+        for file in files:
+            if 'part' not in file.stem:
+                files_by_exp.append([file])
+                files.remove(file)
+
+        names = []
+        for file in files:
+            names.append(file.stem.split('_part')[0])
+        names = list(set(names))
+        for name in names:
+            files_by_exp.append([file for file in files if name in file.stem])
+
+        return files_by_exp
+
+
 
     def my_files(self) -> list[Path]:
         """This function adds the paths of the subjects to the paths list"""
@@ -44,11 +67,13 @@ class Subject:
         datasets = [rec.get_dataset(include_synthetics) for rec in self.recordings if
                     any([rec.match_experiment(exp) for exp in experiments])]
 
-        data = [data for data, labels in datasets]
-        labels = [labels for data, labels in datasets]
+        if len(datasets) > 0:
+            data = [data for data, labels in datasets]
+            labels = [labels for data, labels in datasets]
 
-        data = np.concatenate(tuple(data), axis=0)
-        labels = np.concatenate(tuple(labels), axis=0)
+            data = np.concatenate(tuple(data), axis=0)
+            labels = np.concatenate(tuple(labels), axis=0)
+        else:
+            data = None
+            labels = None
         return data, labels
-
-

@@ -1,6 +1,10 @@
 import torch.nn as nn
 import torch as torch
 import torch.nn.functional as F
+from tqdm import tqdm
+from bokeh.io import output_file, show
+from bokeh.layouts import row
+from bokeh.plotting import figure
 
 
 class Net(nn.Module):
@@ -22,34 +26,49 @@ class Net(nn.Module):
 
     def forward(self, x):
         x = self.conv_1(x)
+        x = F.relu(x)
         x = self.batch_norm_1(x)
-        x = F.relu(x)
         x = self.conv_2(x)
-        x = self.batch_norm_2(x)
         x = F.relu(x)
+        x = self.batch_norm_2(x)
         x = torch.flatten(x, 1)
         x = self.fc_1(x)
-        x = self.batch_norm_3(x)
         x = F.relu(x)
+        x = self.batch_norm_3(x)
         x = F.dropout(x, p=self.dropout_rate)
         x = self.fc_2(x)
-        x = self.batch_norm_4(x)
         x = F.relu(x)
+        x = self.batch_norm_4(x)
         x = F.dropout(x, p=self.dropout_rate)
         x = self.fc_3(x)
         x = F.softmax(x, dim=1)
         return x
 
 
-def train(model: torch.nn.Module, train_dataloader, test_dataloader, epochs, optimizer, loss_function):
-    for t in range(epochs):
-        print(f"Epoch {t+1}\n-------------------------------")
+def train(model: torch.nn.Module, train_dataloader, test_dataloader, epochs: int, optimizer, loss_function):
+    global y_loss, y_accu
+    # initialize the variables for the loss and accuracy plotting
+    y_loss = {'train': [], 'val': []}  # loss history
+    y_accu = {'train': [], 'val': []}
+    x_epoch = list(range(epochs))
+
+    for epoch in tqdm(range(epochs), desc='training model', unit='epoch'):
         model.float()
         model.train()
         train_loop(train_dataloader, model, loss_function, optimizer)
         model.eval()
         test_loop(test_dataloader, model, loss_function)
-        print("Done!")
+
+    fig_1 = figure(title='Training Loss', x_axis_label='Epoch', y_axis_label='Loss')
+    fig_1.line(x_epoch, y_loss['train'], legend_label='Train Loss', color='blue')
+    fig_1.line(x_epoch, y_loss['val'], legend_label='Validation Loss', color='red')
+
+    fig_2 = figure(title='Training Accuracy', x_axis_label='Epoch', y_axis_label='Accuracy')
+    fig_2.line(x_epoch, y_accu['train'], legend_label='Train Accuracy', color='blue')
+    fig_2.line(x_epoch, y_accu['val'], legend_label='Validation Accuracy', color='red')
+
+    show(row(fig_1, fig_2))
+    print("Done Training!")
 
 
 def train_loop(dataloader, model, loss_fn, optimizer):
@@ -64,22 +83,27 @@ def train_loop(dataloader, model, loss_fn, optimizer):
         loss.backward()
         optimizer.step()
 
-        if batch % 100 == 0:
-            loss, current = loss.item(), batch * len(X)
-            print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+    train_loss, train_accu = calc_loss_accu(dataloader, model, loss_fn)
+    global y_loss, y_accu
+    y_loss['train'].append(train_loss)  # average loss per batch
+    y_accu['train'].append(train_accu * 100)  # accuracy in percent
 
 
 def test_loop(dataloader, model, loss_fn):
-    size = len(dataloader.dataset)
-    num_batches = len(dataloader)
-    test_loss, correct = 0, 0
+    test_loss, test_accu = calc_loss_accu(dataloader, model, loss_fn)
+    global y_loss, y_accu
+    y_loss['val'].append(test_loss)  # average loss per batch
+    y_accu['val'].append(test_accu * 100)  # accuracy in percent
 
+
+def calc_loss_accu(dataloader, model, loss_fn):
+    loss, correct = 0, 0
     with torch.no_grad():
         for X, y in dataloader:
             pred = model(X.float())
-            test_loss += loss_fn(pred, y.long()).item()
+            loss += loss_fn(pred, y.long()).item()
             correct += (pred.argmax(1) == y).type(torch.float).sum().item()
+    accu = correct / len(dataloader.dataset)
+    loss = loss / len(dataloader)
+    return loss, accu
 
-    test_loss /= num_batches
-    correct /= size
-    print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")

@@ -10,13 +10,14 @@ class Data_Pipeline:
     emg_sample_rate: int = 4000  # sample rate in HZ
     acc_sample_rate: int = 4000  # sample rate in HZ
     segment_length_sec: float = 0.2
-    emg_high_freq: float = 450
-    emg_low_freq: float = 40
+    emg_high_freq: float = 400
+    emg_low_freq: float = 20
     emg_notch_freq: float = 50
     normalization_quantiles_segments: tuple = None  # (lower, upper) quantiles for normalization of segments
     normalization_quantiles_features: tuple = (0.01, 0.99)  # (lower, upper) quantiles for normalization of features
     features_extraction_method: str = 'RMS'  # name of the method to extract features from segments
     features_extraction_params: dict = field(default_factory=dict)  # parameters for the features extraction method
+    num_repetition_hmm: int = 6  # number of repetitions for the HMM model
 
 
 @dataclass
