@@ -40,6 +40,7 @@ class Data_Manager:
 
         # TODO: create a progress bar for this loop
         datasets = [subject.get_datasets(experiments, include_synthetics) for subject in self.subjects]
+        datasets = [dataset for dataset in datasets if dataset[0] is not None and dataset[1] is not None]
 
         data = np.concatenate(tuple([data for data, labels in datasets]), axis = 0)
         labels = np.concatenate(tuple([labels for data, labels in datasets]), axis = 0)
