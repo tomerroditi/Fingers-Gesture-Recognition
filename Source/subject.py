@@ -1,6 +1,7 @@
 from .paths_handler import Paths_Handler
 from .recording import Recording
 from .pipelines import Data_Pipeline
+from tqdm.auto import tqdm
 from torch.utils.data import TensorDataset, ConcatDataset
 from pathlib import Path
 import numpy as np
@@ -22,6 +23,12 @@ class Subject:
             [rec.load_file() for rec in recordings]
         return recordings
 
+    def my_files(self) -> list[Path]:
+        """This function adds the paths of the subjects to the paths list"""
+        paths_handler = Paths_Handler(self.data_pipeline.base_data_files_path)
+        paths_handler.add_paths_of_subjects_num(self.subject_num)
+        return paths_handler.paths
+
     @staticmethod
     def experiment_files(files: list[Path]) -> list[list[Path]]:
         """group the files by experiment, some experiment has several files, each has a different part of the
@@ -40,14 +47,6 @@ class Subject:
             files_by_exp.append([file for file in files if name in file.stem])
 
         return files_by_exp
-
-
-
-    def my_files(self) -> list[Path]:
-        """This function adds the paths of the subjects to the paths list"""
-        paths_handler = Paths_Handler(self.data_pipeline.base_data_files_path)
-        paths_handler.add_paths_of_subjects_num(self.subject_num)
-        return paths_handler.paths
 
     def get_my_experiments(self, experiments: list[str] | str) -> list[str]:
         """extract the experiments that are in the subject"""
