@@ -57,13 +57,13 @@ class Subject:
                           any([rec.match_experiment(exp) for exp in experiments])]
         return my_experiments
 
-    def get_datasets(self, experiments: list | str, include_synthetics: bool = False) -> (np.array, np.array):
+    def get_datasets(self, experiments: list | str) -> (np.array, np.array):
         """extract a dataset of the given experiments from the subject"""
         if isinstance(experiments, str):
             experiments = [experiments]
 
         # TODO: create a progress bar for this loop
-        datasets = [rec.get_dataset(include_synthetics) for rec in self.recordings if
+        datasets = [rec.get_dataset() for rec in self.recordings if
                     any([rec.match_experiment(exp) for exp in experiments])]
 
         if len(datasets) > 0:

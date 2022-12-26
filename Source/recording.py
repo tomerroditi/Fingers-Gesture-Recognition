@@ -316,7 +316,7 @@ class Recording:
     def normalize_features(self) -> np.array:
         self.features = self.norm_me(self.features, self.pipeline.features_norm)
 
-    def get_dataset(self, include_synthetics = False) -> (np.array, np.array):
+    def get_dataset(self) -> (np.array, np.array):
         """extract a dataset of the given recording file"""
         if self.features.size == 0:  # empty array, no features were extracted
             self.preprocess_data()

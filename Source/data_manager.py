@@ -21,7 +21,7 @@ class Data_Manager:
         print(f'Experiments in datasets: {experiments_in_datasets}')
         print('Experiments format is: subject_session_position')
 
-    def get_dataset(self, experiments: str or list, include_synthetics = False) -> (np.array, np.array):
+    def get_dataset(self, experiments: str or list) -> (np.array, np.array):
         """
         extract a dataset of the given experiments from the main database
 
@@ -36,7 +36,7 @@ class Data_Manager:
         experiments_in_datasets = [exp for exp_list in experiments_in_datasets for exp in exp_list]  # flatten list
 
         # TODO: create a progress bar for this loop
-        datasets = [subject.get_datasets(experiments, include_synthetics) for subject in self.subjects]
+        datasets = [subject.get_datasets(experiments) for subject in self.subjects]
         datasets = [dataset for dataset in datasets if dataset[0] is not None and dataset[1] is not None]
 
         data = np.concatenate(tuple([data for data, labels in datasets]), axis = 0)
