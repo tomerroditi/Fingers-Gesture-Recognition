@@ -1,10 +1,13 @@
 import torch.nn as nn
 import torch as torch
 import torch.nn.functional as F
+from torch.utils.data import TensorDataset, DataLoader
 from tqdm import tqdm
+import numpy as np
 from bokeh.io import output_file, show
 from bokeh.layouts import row
 from bokeh.plotting import figure
+from sklearn.model_selection import train_test_split
 
 
 class Net(nn.Module):
@@ -12,8 +15,10 @@ class Net(nn.Module):
     dropout_rate = 0.3
     input_shape = (1, 4, 4)
 
-    def __init__(self, num_classes: int = 10):
+    def __init__(self, num_classes: int = 10, label_encoder=None):
         super().__init__()
+        self.label_encoder = label_encoder
+
         self.conv_1 = nn.Conv2d(1, 2, 2, padding='same')
         self.batch_norm_1 = nn.BatchNorm2d(2)
         self.conv_2 = nn.Conv2d(2, 4, 2, padding='same')
@@ -26,23 +31,84 @@ class Net(nn.Module):
 
     def forward(self, x):
         x = self.conv_1(x)
-        x = F.relu(x)
         x = self.batch_norm_1(x)
-        x = self.conv_2(x)
         x = F.relu(x)
+        x = self.conv_2(x)
         x = self.batch_norm_2(x)
+        x = F.relu(x)
         x = torch.flatten(x, 1)
         x = self.fc_1(x)
-        x = F.relu(x)
         x = self.batch_norm_3(x)
+        x = F.relu(x)
         x = F.dropout(x, p=self.dropout_rate)
         x = self.fc_2(x)
-        x = F.relu(x)
         x = self.batch_norm_4(x)
+        x = F.relu(x)
         x = F.dropout(x, p=self.dropout_rate)
         x = self.fc_3(x)
         x = F.softmax(x, dim=1)
         return x
+
+    def classify(self, data: np.array):
+        """classify the data according to the model's label encoder"""
+        predictions = self(torch.from_numpy(data).float())
+        predictions = torch.argmax(predictions, dim=1)
+        predictions = predictions.detach().numpy()
+        return predictions
+
+
+def create_dataloaders(train_data: np.array, train_targets: np.array, test_data: np.array, test_targets: np.array,
+                       batch_size: int = 64) -> (DataLoader, DataLoader):
+    """
+    This function created data loaders from numpy arrays of data and targets (train and test)
+    inputs:
+        train_data: numpy array of data for training
+        train_targets: numpy array of targets for training
+        test_data: numpy array of data for testing
+        test_targets: numpy array of targets for testing
+        batch_size: int, the size of the batches to be used in the data loaders
+    outputs:
+        train_loader: DataLoader object, contains the training data
+        test_loader: DataLoader object, contains the testing data
+    """
+    train_dataset_torch = TensorDataset(torch.from_numpy(train_data), torch.from_numpy(train_targets))
+    test_dataset_torch = TensorDataset(torch.from_numpy(test_data), torch.from_numpy(test_targets))
+
+    train_dataloader = DataLoader(train_dataset_torch, batch_size=batch_size, shuffle=True,
+                                  drop_last=True)
+    test_dataloader = DataLoader(test_dataset_torch, batch_size=batch_size, shuffle=False)
+
+    return train_dataloader, test_dataloader
+
+
+def train_test_split_by_gesture(*arrays, labels: np.array = None, test_size: float = 0.2, seed: int = 42):
+    """
+    split data into train test sets, each set will contain data from different gestures repetitions, e.g. if we have
+    10 repetitions of "fist" gestures from an experiment ('001_1_1_fist_1', '001_1_1_fist_2', ..., '001_1_1_fist_10')
+    inputs:
+        arrays: numpy arrays, each array should have the same number of rows (samples) as the labels array
+        labels: numpy array of labels, each label should be a string
+        test_size: float, the percentage of the data to be used for testing
+    outputs:
+        train_test_split: list of numpy arrays, each array contains the data for one of the sets (train, test)
+    """
+    unique_labels = np.unique(labels)
+    unique_labels_no_num = np.char.rstrip(unique_labels, '_0123456789')
+    train_gestures, test_gestures = train_test_split(unique_labels, stratify=unique_labels_no_num, test_size=test_size,
+                                                     random_state=seed)
+    train_arrays = []
+    test_arrays = []
+    for array in arrays:
+        train_arrays.append(array[np.isin(labels, train_gestures)])
+        test_arrays.append(array[np.isin(labels, test_gestures)])
+
+    train_labels = labels[np.isin(labels, train_gestures)]
+    test_labels = labels[np.isin(labels, test_gestures)]
+
+    if len(arrays) == 1:
+        return train_arrays[0], test_arrays[0], train_labels, test_labels
+    else:
+        return train_arrays, test_arrays, train_labels, test_labels
 
 
 def train(model: torch.nn.Module, train_dataloader, test_dataloader, epochs: int, optimizer, loss_function):
