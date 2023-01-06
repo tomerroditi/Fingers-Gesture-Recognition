@@ -111,7 +111,7 @@ def train_test_split_by_gesture(*arrays, labels: np.array = None, test_size: flo
         return train_arrays, test_arrays, train_labels, test_labels
 
 
-def train(model: torch.nn.Module, train_dataloader, test_dataloader, epochs: int, optimizer, loss_function):
+def train(model: torch.nn.Module, train_dataloader, test_dataloader, epochs: int, optimizer, loss_function, experiment_name: str):
     global y_loss, y_accu
     # initialize the variables for the loss and accuracy plotting
     y_loss = {'train': [], 'val': []}  # loss history
@@ -124,7 +124,8 @@ def train(model: torch.nn.Module, train_dataloader, test_dataloader, epochs: int
         train_loop(train_dataloader, model, loss_function, optimizer)
         model.eval()
         test_loop(test_dataloader, model, loss_function)
-
+    path = "C:/Users/galba/Desktop/לימודים/פרוייקט הנדסה/Fingers-Gesture-Recognition_2/results/"
+    output_file(path+"result"+experiment_name.split('_')[0]+"/"+experiment_name.split('_')[1]+".html")
     fig_1 = figure(title='Training Loss', x_axis_label='Epoch', y_axis_label='Loss')
     fig_1.line(x_epoch, y_loss['train'], legend_label='Train Loss', color='blue')
     fig_1.line(x_epoch, y_loss['val'], legend_label='Validation Loss', color='red')

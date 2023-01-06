@@ -5,10 +5,10 @@ from pathlib import Path
 @dataclass  # useful wrapper to make a class with only attributes and no methods (like a struct)
 class Data_Pipeline:
     """this class is a dataclass that holds the parameters for data preprocessing"""
-    base_data_files_path: Path = Path(r'C:\Users\tomer\Documents\data sets\finger gesture recognition')
+    base_data_files_path: Path = Path(r'G:\.shortcut-targets-by-id\1mJSkabZ2V80Qi-NhOEPyvzSPUL2Z7iTI\finger gesture recognition')
     max_gesture_duration: float = 8  # the supposed maximum duration of a gesture in seconds (depends on the protocol)
-    annotation_delay_start: float = 1
-    annotation_delay_end: float = 1
+    annotation_delay_start: float = 0.3
+    annotation_delay_end: float = 0.3
     segmentation_type: str = 'discrete'  # discrete or continuous
     emg_sample_rate: int = 4000  # sample rate in HZ
     acc_sample_rate: int = 4000  # sample rate in HZ
@@ -16,7 +16,7 @@ class Data_Pipeline:
     segment_step_sec: float = 0.1  # step between segments in seconds
     emg_high_freq: float = 400
     emg_low_freq: float = 20
-    emg_notch_freq: float = 50
+    emg_notch_freq: list[float] = field(default_factory=lambda: [50, 100])
     emg_norm: str = 'none'  # none, zscore, 01, -11, quantile_#-#
     acc_norm: str = 'none'  # none, zscore, 01, -11, quantile_#-#
     features_norm: str = 'none'  # none, zscore, 01, -11, quantile_#-#

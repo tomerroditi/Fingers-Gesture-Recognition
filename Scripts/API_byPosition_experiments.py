@@ -11,10 +11,9 @@ import matplotlib.pyplot as plt
 import os
 
 # run the pipline on all the subject in base_data_files_path
-# subjects = os.listdir(Data_Pipeline.base_data_files_path)
-# subjects = [subject.lstrip('0') for subject in subjects]
+subjects = os.listdir(Data_Pipeline.base_data_files_path)
+subjects = [subject.lstrip('0') for subject in subjects]
 
-subjects = ['5', '6', '7', '11', '12', '13']
 # save all accuracies of all subjects in a list
 accuracies = []
 
@@ -27,10 +26,15 @@ for subject in subjects:
 
     # %% extract datasets from the data manager and convert into torch dataloaders
     try:
-        dataset = dm.get_dataset(experiments=['*_*_2'])
+        train_dataset = dm.get_dataset(experiments=['*_*_1', '*_*_2'])
+        test_dataset = dm.get_dataset(experiments=['*_*_3'])
         print('finished extracting the dataset')
-        data = dataset[0]
-        labels = dataset[1]  # labels of not synthetic data includes the gesture number and experiment name as well
+        train_data = train_dataset[0]
+        train_labels = train_dataset[
+            1]  # labels of not synthetic data includes the gesture number and experiment name as well
+        test_data = test_dataset[0]
+        test_labels = test_dataset[
+            1]  # labels of not synthetic data includes the gesture number and experiment name as well
     except:
         print('failed to extract the dataset of subject ' + subject)
         continue
@@ -39,8 +43,6 @@ for subject in subjects:
     # gesture and experiment to be in the same set. the labels format is '<experiment name>_<gesture name>_<gesture number>'
     # the splitting function bellow takes care of that...
     try:
-        train_data, test_data, train_labels, test_labels = models.train_test_split_by_gesture(data, labels=labels,
-                                                                                              test_size=0.2, seed=42)
         # add synthetic data to the training set (optional, enrich the training data)
         train_data, train_labels = dm.add_synthetics(train_data, train_labels, 6)
 
@@ -75,7 +77,7 @@ for subject in subjects:
         model = models.Net(label_encoder=label_encoder)
         loss_func = nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=L2_penalty)
-        models.train(model, train_loader, test_loader, num_epochs, optimizer, loss_func, 'Random_' + str(subject))
+        models.train(model, train_loader, test_loader, num_epochs, optimizer, loss_func, 'ByPosition_' + str(subject))
     except:
         print('failed to train the model of subject ' + subject)
         continue
@@ -108,7 +110,7 @@ for subject in subjects:
                                                         labels=label_encoder.classes_)
     sklearn.metrics.ConfusionMatrixDisplay(confusion_matrix, display_labels=label_encoder.classes_).plot()
     path = "C:/Users/galba/Desktop/לימודים/פרוייקט הנדסה/Fingers-Gesture-Recognition_2/results/"
-    plt.savefig(path+"resultRandom/" + str(subject) + '_confusion.png')
+    plt.savefig(path+"resultByPosition/" + str(subject) + '_confusion.png')
     plt.show()
     print('subject: ', subject, ' finished')
 print('finished all subjects')

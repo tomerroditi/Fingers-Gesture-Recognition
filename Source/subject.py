@@ -48,7 +48,7 @@ class Subject:
 
         return files_by_exp
 
-    def get_my_experiments(self, experiments: list[str] | str) -> list[str]:
+    def get_my_experiments(self, experiments: list[str] or str) -> list[str]:
         """extract the experiments that are in the subject"""
         if isinstance(experiments, str):
             experiments = [experiments]
@@ -57,7 +57,7 @@ class Subject:
                           any([rec.match_experiment(exp) for exp in experiments])]
         return my_experiments
 
-    def get_datasets(self, experiments: list | str) -> (np.array, np.array):
+    def get_datasets(self, experiments: list or str) -> (np.array, np.array):
         """extract a dataset of the given experiments from the subject"""
         if isinstance(experiments, str):
             experiments = [experiments]
