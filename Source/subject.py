@@ -10,7 +10,7 @@ import numpy as np
 class Subject:
 
     def __init__(self, subject_num: int, data_pipeline: Data_Pipeline):
-        self.subject_num = subject_num
+        self.subject_num = f'{subject_num:03}'
         self.data_pipeline = data_pipeline
         self.recordings = self.load_recordings(load_data=False)
 
@@ -20,13 +20,13 @@ class Subject:
         files = self.experiment_files(files)
         recordings = [Recording(paths, self.data_pipeline) for paths in files]
         if load_data:
-            [rec.load_file() for rec in recordings]
+            [rec.load_file() for rec in tqdm(recordings, desc='Loading recordings files', leave=False, unit='rec')]
         return recordings
 
     def my_files(self) -> list[Path]:
         """This function adds the paths of the subjects to the paths list"""
         paths_handler = Paths_Handler(self.data_pipeline.base_data_files_path)
-        paths_handler.add_paths_of_subjects_num(self.subject_num)
+        paths_handler.add_paths_of_subjects_num(int(self.subject_num))
         return paths_handler.paths
 
     @staticmethod
@@ -49,7 +49,7 @@ class Subject:
         return files_by_exp
 
     def get_my_experiments(self, experiments: list[str] | str) -> list[str]:
-        """extract the experiments that are in the subject"""
+        """returns the experiments that are in the subject from the given list of experiments"""
         if isinstance(experiments, str):
             experiments = [experiments]
 
@@ -57,13 +57,13 @@ class Subject:
                           any([rec.match_experiment(exp) for exp in experiments])]
         return my_experiments
 
-    def get_datasets(self, experiments: list | str, include_synthetics: bool = False) -> (np.array, np.array):
+    def get_dataset(self, experiments: list[str] | str) -> (np.array, np.array):
         """extract a dataset of the given experiments from the subject"""
         if isinstance(experiments, str):
             experiments = [experiments]
 
         # TODO: create a progress bar for this loop
-        datasets = [rec.get_dataset(include_synthetics) for rec in self.recordings if
+        datasets = [rec.get_dataset() for rec in self.recordings if
                     any([rec.match_experiment(exp) for exp in experiments])]
 
         if len(datasets) > 0:

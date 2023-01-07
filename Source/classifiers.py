@@ -25,8 +25,6 @@ class Classifier_Factory:
         else:
             raise ValueError(f'Classifier {classifier_name} is not supported')
 
-
-
     @staticmethod
     def my_svm(**kwargs):
         return SVC(**kwargs)

@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 import matplotlib.pyplot as plt
 from .pipelines import Data_Pipeline
@@ -67,7 +69,7 @@ class Recording:
                 session = name[1:]
             elif name[0:3].upper() == 'POS':
                 position = name[3:]
-            elif len(name) == 3:
+            elif len(name) == 3 and name.isdigit():
                 subject = name
         try:
             # noinspection PyUnboundLocalVariable
@@ -251,23 +253,25 @@ class Recording:
         """
         segment_length_emg = floor(self.pipeline.segment_length_sec * self.pipeline.emg_sample_rate)
         segment_length_acc = floor(self.pipeline.segment_length_sec * self.pipeline.acc_sample_rate)
-        num_emg_channels = self.raw_edf_emg.info['nchan']
-        num_acc_channels = self.raw_edf_acc.info['nchan']
 
-        segments_emg = np.empty(shape=(0, num_emg_channels, segment_length_emg), dtype=np.float16)
-        segments_acc = np.empty(shape=(0, num_acc_channels, segment_length_acc), dtype=np.float16)
-        labels = np.empty(shape=(0,), dtype=str)
+        segments_emg = []
+        segments_acc = []
+        labels = []
         step_size = floor(self.pipeline.segment_step_sec * self.pipeline.emg_sample_rate)
         for emg_data, acc_data, label in self.annotations_data:
             # emg segmentation and labels creation
             for i in range(0, emg_data.shape[1] - segment_length_emg, step_size):
                 curr_emg_segment = emg_data[:, i:i + segment_length_emg][np.newaxis, :, :]
-                segments_emg = np.vstack((segments_emg, curr_emg_segment))
-                labels = np.append(labels, label)
+                segments_emg.append(curr_emg_segment)
+                labels.append(label)
             # acc segmentation
-            for i in range(0, acc_data.shape[1] - segment_length_acc, segment_length_acc):
+            for i in range(0, acc_data.shape[1] - segment_length_acc, step_size):
                 curr_acc_segment = acc_data[:, i:i + segment_length_acc][np.newaxis, :, :]
-                segments_acc = np.vstack((segments_acc, curr_acc_segment))
+                segments_acc.append(curr_acc_segment)
+
+        segments_emg = np.concatenate(segments_emg, axis=0, dtype=np.float32)
+        segments_acc = np.concatenate(segments_acc, axis=0, dtype=np.float32)
+        labels = np.array(labels, dtype=str)
 
         self.segments = (segments_emg, segments_acc)
         self.labels = labels  # notice that the number of the gesture is included in the labels!
@@ -282,26 +286,33 @@ class Recording:
         emg_segments = self.norm_me(emg_segments, self.pipeline.emg_norm)
         self.segments = (emg_segments, acc_segments)
 
+    def normalize_features(self) -> np.array:
+        self.features = self.norm_me(self.features, self.pipeline.features_norm)
+
     @staticmethod
     def norm_me(data: np.array, norm_type: str) -> np.array:
+        axis = tuple(range(1, data.ndim))
         if norm_type == 'zscore':
-            mean = np.mean(data, axis=(1, 2), keepdims=True)
-            std = np.std(data, axis=(1, 2), keepdims=True)
+            mean = np.mean(data, axis=axis, keepdims=True)
+            std = np.std(data, axis=axis, keepdims=True)
             data = (data - mean) / std
         elif norm_type == '01':
-            min_ = np.min(data, axis=(1, 2), keepdims=True)
-            max_ = np.max(data, axis=(1, 2), keepdims=True)
+            min_ = np.min(data, axis=axis, keepdims=True)
+            max_ = np.max(data, axis=axis, keepdims=True)
             data = (data - min_) / (max_ - min_)
         elif norm_type == '-11':
-            min_ = np.min(data, axis=(1, 2), keepdims=True)
-            max_ = np.max(data, axis=(1, 2), keepdims=True)
+            min_ = np.min(data, axis=axis, keepdims=True)
+            max_ = np.max(data, axis=axis, keepdims=True)
             data = 2 * (data - min_) / (max_ - min_) - 1
         elif 'quantile' in norm_type:
             quantiles = norm_type.split('_')[1].split('-')
             quantiles = [float(q) for q in quantiles]
-            low_quantile = np.quantile(data, quantiles[0], axis=(1, 2), keepdims=True)
-            high_quantile = np.quantile(data, quantiles[1], axis=(1, 2), keepdims=True)
+            low_quantile = np.quantile(data, quantiles[0], axis=axis, keepdims=True)
+            high_quantile = np.quantile(data, quantiles[1], axis=axis, keepdims=True)
             data = (data - low_quantile) / (high_quantile - low_quantile)
+        elif norm_type == 'max':
+            max_ = np.max(data, axis=axis, keepdims=True)
+            data = data / max_
         elif norm_type == 'none':
             pass
         else:
@@ -313,10 +324,7 @@ class Recording:
         features = feature_extractor.extract_features(self.segments, **self.pipeline.features_extraction_params)
         self.features = features
 
-    def normalize_features(self) -> np.array:
-        self.features = self.norm_me(self.features, self.pipeline.features_norm)
-
-    def get_dataset(self, include_synthetics = False) -> (np.array, np.array):
+    def get_dataset(self) -> (np.array, np.array):
         """extract a dataset of the given recording file"""
         if self.features.size == 0:  # empty array, no features were extracted
             self.preprocess_data()

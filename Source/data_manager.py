@@ -4,6 +4,7 @@ from .subject import Subject
 from .pipelines import Data_Pipeline
 from .wrappers import reset
 import numpy as np
+from tqdm.auto import tqdm
 
 
 class Data_Manager:
@@ -18,10 +19,10 @@ class Data_Manager:
         all_notation = ['*_*_*']
         experiments_in_datasets = [subject.get_my_experiments(all_notation) for subject in self.subjects]
         experiments_in_datasets = [exp for exp_list in experiments_in_datasets for exp in exp_list]  # flatten list
-        print(f'Experiments in datasets: {experiments_in_datasets}')
+        print(f'Available experiments in the data manager: {experiments_in_datasets}')
         print('Experiments format is: subject_session_position')
 
-    def get_dataset(self, experiments: str or list, include_synthetics = False) -> (np.array, np.array):
+    def get_dataset(self, experiments: str or list) -> (np.array, np.array):
         """
         extract a dataset of the given experiments from the main database
 
@@ -34,15 +35,28 @@ class Data_Manager:
 
         experiments_in_datasets = [subject.get_my_experiments(experiments) for subject in self.subjects]
         experiments_in_datasets = [exp for exp_list in experiments_in_datasets for exp in exp_list]  # flatten list
+        print(f'Experiments in datasets: {experiments_in_datasets}\n'
+              f'Starting to extract datasets')
 
-        # TODO: create a progress bar for this loop
-        datasets = [subject.get_datasets(experiments, include_synthetics) for subject in self.subjects]
-        datasets = [dataset for dataset in datasets if dataset[0] is not None and dataset[1] is not None]
+        datasets = []
+        for exp in tqdm(experiments_in_datasets, desc='Loading experiments datasets', unit='exp'):
+            for subject in self.subjects:
+                if subject.get_my_experiments(exp):
+                    datasets.append(subject.get_dataset(exp))
+                    break
+        print('finished extracting the dataset')
 
-        data = np.concatenate(tuple([data for data, labels in datasets]), axis = 0)
-        labels = np.concatenate(tuple([labels for data, labels in datasets]), axis = 0)
+        try:
+            data = np.concatenate(tuple([data for data, labels in datasets]), axis=0)
+            labels = np.concatenate(tuple([labels for data, labels in datasets]), axis=0)
+        except ValueError as e:
+            if str(e) == 'need at least one array to concatenate':
+                print('No data was found for the specified experiments')
+                return None, None
+            else:
+                raise e
 
-        return data, labels, experiments_in_datasets
+        return data, labels
 
     @staticmethod
     def add_synthetics(data: np.array, labels: np.array, num: int) -> (np.array, np.array):
