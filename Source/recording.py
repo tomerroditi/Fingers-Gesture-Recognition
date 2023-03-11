@@ -39,7 +39,8 @@ class Recording:
     emg_chan_order = ['EMG Ch-1', 'EMG Ch-2', 'EMG Ch-3', 'EMG Ch-4', 'EMG Ch-5', 'EMG Ch-6', 'EMG Ch-7', 'EMG Ch-8',
                       'EMG Ch-9', 'EMG Ch-10', 'EMG Ch-11', 'EMG Ch-12', 'EMG Ch-13', 'EMG Ch-14', 'EMG Ch-15',
                       'EMG Ch-16']
-    acc_chan_order = ['Accelerometer_X', 'Accelerometer_Y', 'Accelerometer_Z']
+    acc_chan_order_1 = ['Accelerometer_X', 'Accelerometer_Y', 'Accelerometer_Z']
+    acc_chan_order_2 = ['ACC-X', 'ACC-Y', 'ACC-Z']
 
     def __init__(self, files_path: list[Path], pipeline: Data_Pipeline):
         self.files_path: list[Path] = files_path
@@ -88,11 +89,18 @@ class Recording:
         files_names.sort()  # part1, part2, etc. should be in order
         for file_name in files_names:
             raw_edf = mne.io.read_raw_edf(file_name, preload = True, stim_channel = 'auto', verbose = False)
-            curr_raw_edf_acc = raw_edf.copy().pick_channels({"Accelerometer_X", "Accelerometer_Y", "Accelerometer_Z"})
-            curr_raw_edf_emg = raw_edf.copy().drop_channels({"Accelerometer_X", "Accelerometer_Y", "Accelerometer_Z"})
-            # rearrange the channels to create a uniform order between all recordings
-            curr_raw_edf_acc = curr_raw_edf_acc.reorder_channels(self.acc_chan_order)
-            curr_raw_edf_emg = curr_raw_edf_emg.reorder_channels(self.emg_chan_order)
+            try:
+                curr_raw_edf_acc = raw_edf.copy().pick_channels({"Accelerometer_X", "Accelerometer_Y", "Accelerometer_Z"})
+                curr_raw_edf_emg = raw_edf.copy().drop_channels({"Accelerometer_X", "Accelerometer_Y", "Accelerometer_Z"})
+                # rearrange the channels to create a uniform order between all recordings
+                curr_raw_edf_acc = curr_raw_edf_acc.reorder_channels(self.acc_chan_order_1)
+                curr_raw_edf_emg = curr_raw_edf_emg.reorder_channels(self.emg_chan_order)
+            except ValueError:
+                curr_raw_edf_acc = raw_edf.copy().pick_channels({"ACC-X", "ACC-Y", "ACC-Z"})
+                curr_raw_edf_emg = raw_edf.copy().drop_channels({"ACC-X", "ACC-Y", "ACC-Z"})
+                # rearrange the channels to create a uniform order between all recordings
+                curr_raw_edf_acc = curr_raw_edf_acc.reorder_channels(self.acc_chan_order_2)
+                curr_raw_edf_emg = curr_raw_edf_emg.reorder_channels(self.emg_chan_order)
             # concat files of the same experiment
             if self.raw_edf_acc is None:
                 self.raw_edf_acc = curr_raw_edf_acc
@@ -105,7 +113,7 @@ class Recording:
         annotations = self.raw_edf_emg.annotations  # use the concatenated raw_edf_emg object to get the annotations
         annotations = [(onset, description) for onset, description in
                             zip(annotations.onset, annotations.description)
-                            if 'Start_' in description or 'Release_' in description]
+                            if 'Start' in description or 'Release' in description or 'End' in description]
         annotations = self.verify_annotations(annotations)
         self.annotations = annotations
 
@@ -115,13 +123,20 @@ class Recording:
         and that each consecutive start, stop annotations are of the same gesture, where targets are in the format of:
         Start_<gesture_name>_<number> and Release_<gesture_name>_<number>
         """
+        # reject unwanted annotations
+        for onset, description in annotations:
+            if description == 'Recording Started' or \
+               description == 'Start Experiment' or \
+               description == 'App End Recording':
+                annotations.remove((onset, description))
+        # verify that the annotations are in the right order - start, stop, start, stop, etc.
         counter = {}
         verified_annotations = []
         for i, annotation in enumerate(annotations):
-            if 'Start_' in annotation[1]:
-                start_description = annotation[1].replace('Start_', '').strip()
-                if 'Release_' in annotations[i + 1][1]:
-                    end_description = annotations[i + 1][1].replace('Release_', '').strip()
+            if 'Start' in annotation[1]:
+                start_description = annotation[1].replace('Start', '').strip('_ ')
+                if 'Release' in annotations[i + 1][1] or 'End' in annotations[i + 1][1]:
+                    end_description = annotations[i + 1][1].replace('Release', '').replace('End', '').strip('_ ')
                     max_gesture_duration = self.pipeline.max_gesture_duration
                     if start_description != end_description:
                         print(f'Error: annotation mismatch of {start_description} in time: {annotation[0]}'
@@ -149,7 +164,7 @@ class Recording:
                             verified_annotations.append((annotation[0], f'Start_{start_description}_{gest_num}'))
                             verified_annotations.append((annotations[i + 1][0], f'Release_{end_description}_{gest_num}'))
                 else:
-                    print(f'Error: annotation mismatch, no Release_ annotation for {start_description} in time: '
+                    print(f'Error: annotation mismatch, no Release/End annotation for {start_description} in time: '
                           f'{annotation[0]}, in the experiment: {self.experiment}')
             else:
                 continue

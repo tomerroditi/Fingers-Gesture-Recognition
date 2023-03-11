@@ -9,11 +9,11 @@ simplefilter(action='ignore', category=FutureWarning)
 
 # %% pipeline definition and data manager creation
 pipeline = Data_Pipeline()
-dm = Data_Manager([1], pipeline)
+dm = Data_Manager([17], pipeline)
 print(dm.data_info())
 
 # %% extract datasets from the data manager
-dataset = dm.get_dataset(experiments='001_*_2')
+dataset = dm.get_dataset(experiments='017_*_*')
 data = dataset[0]
 labels = dataset[1]  # labels includes the gesture number and experiment name as well
 
