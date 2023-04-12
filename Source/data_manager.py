@@ -1,8 +1,7 @@
 import collections
 from hmmlearn import hmm
 from .subject import Subject
-from .pipelines import Data_Pipeline
-from .wrappers import reset
+from Source.pipelines import Data_Pipeline
 import numpy as np
 from tqdm.auto import tqdm
 
@@ -100,3 +99,5 @@ class Data_Manager:
         data = np.concatenate((data, synthetic_data), axis=0)
         labels = np.concatenate((labels, generated_labels), axis=0)
         return data, labels
+
+

@@ -1,6 +1,6 @@
 from torch.utils.data import dataset
 import torch.nn as nn
-from .pipelines import Model_Pipeline
+from Source.pipelines import Model_Pipeline
 from sklearn.svm import SVC
 
 

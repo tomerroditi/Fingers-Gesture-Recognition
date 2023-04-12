@@ -1,8 +1,7 @@
-from .paths_handler import Paths_Handler
-from .recording import Recording
-from .pipelines import Data_Pipeline
+from Source.paths_handler import Paths_Handler
+from Source.recording import Recording
+from Source.pipelines import Data_Pipeline
 from tqdm.auto import tqdm
-from torch.utils.data import TensorDataset, ConcatDataset
 from pathlib import Path
 import numpy as np
 
@@ -48,7 +47,7 @@ class Subject:
 
         return files_by_exp
 
-    def get_my_experiments(self, experiments: list[str] | str) -> list[str]:
+    def get_my_experiments(self, experiments: list[str] or str) -> list[str]:
         """returns the experiments that are in the subject from the given list of experiments"""
         if isinstance(experiments, str):
             experiments = [experiments]
@@ -57,7 +56,7 @@ class Subject:
                           any([rec.match_experiment(exp) for exp in experiments])]
         return my_experiments
 
-    def get_dataset(self, experiments: list[str] | str) -> (np.array, np.array):
+    def get_dataset(self, experiments: list[str] or str) -> (np.array, np.array):
         """extract a dataset of the given experiments from the subject"""
         if isinstance(experiments, str):
             experiments = [experiments]

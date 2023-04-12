@@ -2,10 +2,10 @@ import time
 
 import numpy as np
 import matplotlib.pyplot as plt
-from .pipelines import Data_Pipeline
+from Source.pipelines import Data_Pipeline
 from pathlib import Path
 from math import floor
-from .feature_extractors import build_feature_extractor
+from Source.feature_extractors import build_feature_extractor
 import mne
 mne.set_log_level('WARNING')  # disable mne function's printing except warnings
 
@@ -125,9 +125,11 @@ class Recording:
         """
         # reject unwanted annotations
         for onset, description in annotations:
+            # TODO: maybe create a list of the wanted annotations and check if the description is in the list
             if description == 'Recording Started' or \
                description == 'Start Experiment' or \
-               description == 'App End Recording':
+               description == 'App End Recording' or \
+               description == 'Experiment':
                 annotations.remove((onset, description))
         # verify that the annotations are in the right order - start, stop, start, stop, etc.
         counter = {}

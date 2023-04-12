@@ -84,7 +84,8 @@ class pre_training_utils:
         # stratified way.
         too_less_rep = np.array([np.sum(unique_labels_no_num == label) < num_folds for label in unique_labels_no_num])
         print(f'number of gestures with less than {num_folds} repetition: {np.sum(too_less_rep)}\n'
-              f'Their names are: {unique_labels_no_num[too_less_rep]}')
+              f'Their names are: {unique_labels_no_num[too_less_rep]}'
+              f'These gestures have been discarded from the dataset')
         unique_labels = unique_labels[np.logical_not(too_less_rep)]
         unique_labels_no_num = unique_labels_no_num[np.logical_not(too_less_rep)]
 
@@ -172,11 +173,18 @@ class simple_CNN(nn.Module):
         return models, cv_scores
 
     def fit_model(self, data: np.array, labels: np.array, test_size: float = 0.2, batch_size: int = 64, lr=0.001,
-                  l2_weight: float = 0.0001, num_epochs: int = 200) -> None:
+                  l2_weight: float = 0.0001, num_epochs: int = 200, test_data: np.array = None,
+                  test_labels: np.array = None) -> None:
         """This function trains a model and returns the train and test loss and accuracy"""
-        # split the data to train and test
-        train_data, test_data, train_labels, test_labels = \
-            pre_training_utils.train_test_split_by_gesture(data, labels=labels, test_size=test_size)
+        if test_data is None:
+            # split the data to train and test
+            train_data, test_data, train_labels, test_labels = \
+                pre_training_utils.train_test_split_by_gesture(data, labels=labels, test_size=test_size)
+        else:
+            if test_labels is None:
+                raise ValueError('test_labels must be provided if test_data is provided')
+            train_data = data
+            train_labels = labels
 
         # save the data and labels for later use
         self.train_data = train_data
@@ -204,22 +212,23 @@ class simple_CNN(nn.Module):
                     optimizer, loss_function):
         # TODO: add type hints for optimizer and loss_function
         # initialize the variables for the loss and accuracy plotting
+        self.training = True  # flag for the gui
         self.loss_vals = {'train': [], 'val': []}  # loss history
         self.accu_vals = {'train': [], 'val': []}
         x_epoch = []  # epoch history
 
-        # gui
-        plt.ion()
-
-        # create a plot for the loss and accuracy starting from epoch 0
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-        ax1.set_title('Loss'), ax1.set_xlabel('Epoch'), ax1.set_ylabel('Loss')
-        ax2.set_title('Accuracy'), ax2.set_xlabel('Epoch'), ax2.set_ylabel('Accuracy')
-        loss_train_line, = ax1.plot(x_epoch, self.loss_vals['train'], label='train')
-        loss_val_line, = ax1.plot(x_epoch, self.loss_vals['val'], label='val')
-        accu_train_line, = ax2.plot(x_epoch, self.accu_vals['train'], label='train')
-        accu_val_line, = ax2.plot(x_epoch, self.accu_vals['val'], label='val')
-        plt.show()
+        # # gui
+        # plt.ion()
+        #
+        # # create a plot for the loss and accuracy starting from epoch 0
+        # fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+        # ax1.set_title('Loss'), ax1.set_xlabel('Epoch'), ax1.set_ylabel('Loss')
+        # ax2.set_title('Accuracy'), ax2.set_xlabel('Epoch'), ax2.set_ylabel('Accuracy')
+        # loss_train_line, = ax1.plot(x_epoch, self.loss_vals['train'], label='train')
+        # loss_val_line, = ax1.plot(x_epoch, self.loss_vals['val'], label='val')
+        # accu_train_line, = ax2.plot(x_epoch, self.accu_vals['train'], label='train')
+        # accu_val_line, = ax2.plot(x_epoch, self.accu_vals['val'], label='val')
+        # plt.show()
 
         for epoch in tqdm(range(num_epochs), desc='training model', unit='epoch'):
             self.float()
@@ -228,25 +237,26 @@ class simple_CNN(nn.Module):
             self.eval()
             self._test_loop(test_dataloader, loss_function)
             x_epoch.append(epoch)
-            if epoch % 30 == 0: # update the plot with the new loss and accuracy
-                loss_train_line.set_xdata(x_epoch)
-                loss_train_line.set_ydata(self.loss_vals['train'])
-                loss_val_line.set_xdata(x_epoch)
-                loss_val_line.set_ydata(self.loss_vals['val'])
-                accu_train_line.set_xdata(x_epoch)
-                accu_train_line.set_ydata(self.accu_vals['train'])
-                accu_val_line.set_xdata(x_epoch)
-                accu_val_line.set_ydata(self.accu_vals['val'])
-                ax1.relim()
-                ax1.autoscale_view()
-                ax2.relim()
-                ax2.autoscale_view()
-                fig.canvas.draw()
-                fig.canvas.flush_events()
+            # if epoch % 30 == 0: # update the plot with the new loss and accuracy
+            #     loss_train_line.set_xdata(x_epoch)
+            #     loss_train_line.set_ydata(self.loss_vals['train'])
+            #     loss_val_line.set_xdata(x_epoch)
+            #     loss_val_line.set_ydata(self.loss_vals['val'])
+            #     accu_train_line.set_xdata(x_epoch)
+            #     accu_train_line.set_ydata(self.accu_vals['train'])
+            #     accu_val_line.set_xdata(x_epoch)
+            #     accu_val_line.set_ydata(self.accu_vals['val'])
+            #     ax1.relim()
+            #     ax1.autoscale_view()
+            #     ax2.relim()
+            #     ax2.autoscale_view()
+            #     fig.canvas.draw()
+            #     fig.canvas.flush_events()
+        #
+        # plt.ioff()
+        # plt.show()
 
-        plt.ioff()
-        plt.show()
-
+        self.training = False
         print("Done Training!")
 
     def _train_loop(self, dataloader, loss_fn, optimizer) -> None:
@@ -329,10 +339,9 @@ class Net(simple_CNN):
         self.fc_3 = nn.Linear(20, num_classes)
 
     def forward(self, x):
-        # add white gaussian noise to the input only during training with probability 0.5
-        if self.training:
-            if random.random() < 0.3:
-                x = x + torch.randn(x.shape) * 0.1 * (torch.max(x) - torch.min(x))  # up to 20% of the data range
+        # add white gaussian noise to the input only during training
+        if self.training and random.random() < 0.3:  # 30% chance to add noise to the batch (adjust to your needs)
+            x = x + torch.randn(x.shape) * 0.1 * (torch.max(x) - torch.min(x))  # up to 20% of the data range
         x = self.conv_1(x)
         x = self.batch_norm_1(x)
         x = functional.relu(x)
@@ -343,11 +352,11 @@ class Net(simple_CNN):
         x = self.fc_1(x)
         x = self.batch_norm_3(x)
         x = functional.relu(x)
-        x = functional.dropout(x, p=self.dropout_rate)
+        x = functional.dropout(x, p=self.dropout_rate, training=self.training)
         x = self.fc_2(x)
         x = self.batch_norm_4(x)
         x = functional.relu(x)
-        x = functional.dropout(x, p=self.dropout_rate)
+        x = functional.dropout(x, p=self.dropout_rate, training=self.training)
         x = self.fc_3(x)
         x = functional.softmax(x, dim=1)
         return x
