@@ -2,7 +2,7 @@ import mne.io.edf.edf
 import pytest
 import numpy as np
 from pathlib import Path
-from Source.recording import Recording
+from Source.data_manager import Recording
 from Source.pipelines import Data_Pipeline
 
 

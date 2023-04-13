@@ -48,7 +48,7 @@ class pre_training_utils:
         train_gestures, test_gestures = train_test_split(unique_labels, stratify=unique_labels_no_num, test_size=test_size,
                                                          random_state=seed)
 
-        # now spit the data itself to train and test
+        # now split the data itself to train and test
         train_arrays = []
         test_arrays = []
         for array in arrays:
@@ -119,8 +119,15 @@ class pre_training_utils:
             train_loader: DataLoader object, contains the training data
             test_loader: DataLoader object, contains the testing data
         """
-        train_dataset_torch = TensorDataset(torch.from_numpy(train_data), torch.from_numpy(train_targets))
-        test_dataset_torch = TensorDataset(torch.from_numpy(test_data), torch.from_numpy(test_targets))
+        # convert the data to torch tensors, and move them to the GPU if available
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        train_data = torch.from_numpy(train_data).float().to(device)
+        train_targets = torch.from_numpy(train_targets).long().to(device)
+        test_data = torch.from_numpy(test_data).float().to(device)
+        test_targets = torch.from_numpy(test_targets).long().to(device)
+
+        train_dataset_torch = TensorDataset(train_data, train_targets)
+        test_dataset_torch = TensorDataset(test_data, test_targets)
 
         train_dataloader = DataLoader(train_dataset_torch, batch_size=batch_size, shuffle=True,
                                       drop_last=True)
@@ -206,6 +213,11 @@ class simple_CNN(nn.Module):
         # train the model
         optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=l2_weight)
         loss_func = nn.CrossEntropyLoss()
+
+        # move the model to the gpu if available
+        if torch.cuda.is_available():
+            self.cuda()
+
         self.train_model(train_dataloader, test_dataloader, num_epochs, optimizer, loss_func)
 
     def train_model(self, train_dataloader: DataLoader, test_dataloader: DataLoader, num_epochs: int,
@@ -291,7 +303,7 @@ class simple_CNN(nn.Module):
         loss = loss / len(dataloader)
         return loss, accu
 
-    def evaluate_model(self, data: np.array, labels: np.array, cm_title: str = 'unnamed') -> float:
+    def evaluate_model(self, data: np.array, labels: np.array, cm_title: str = 'untitled') -> float:
         predictions = self.classify(data)  # get the gesture of each sample
         unique_labels = np.unique(labels)
         unique_labels_pred = []
@@ -310,15 +322,25 @@ class simple_CNN(nn.Module):
         accuracy = np.sum(unique_labels_pred == unique_labels_striped) / len(unique_labels_striped)
 
         # create and display a confusion matrix
-        cm_disp = sklearn.metrics.ConfusionMatrixDisplay.from_predictions(unique_labels_striped, unique_labels_pred)
-        cm_disp.ax_.set_title(f'Confusion Matrix - {cm_title} - Accuracy: {accuracy:.3f}')
+        tick_labels = np.sort(np.unique(unique_labels_striped))  # use it to make sure that the display is aligned
+        # with cm order
+        cm = sklearn.metrics.confusion_matrix(unique_labels_striped, unique_labels_pred, labels=tick_labels)
+        cm_disp = sklearn.metrics.ConfusionMatrixDisplay(cm, display_labels=tick_labels)
+        cm_disp.plot(cmap='Blues', xticks_rotation='vertical')
+        cm_disp.ax_.set_title(f'{cm_title} - Accuracy: {accuracy:.3f}')
         return accuracy
 
     def classify(self, data: np.array):
         """classify the data according to the model's label encoder"""
-        scores = self(torch.from_numpy(data).float())
+        # convert the data to a tensor and allocate to the same device as the model
+        device = next(self.parameters()).device
+        data = torch.from_numpy(data).float().to(device)
+        # forward pass - get the probabilities of each class
+        scores = self(data)
+        # get the class with the highest probability
         predictions = torch.argmax(scores, dim=1)
-        predictions = predictions.detach().numpy()
+        predictions = predictions.cpu().detach().numpy()
+        # convert the class number to the gesture name
         predictions = self.label_encoder.inverse_transform(predictions)
         return predictions
 
@@ -341,7 +363,12 @@ class Net(simple_CNN):
     def forward(self, x):
         # add white gaussian noise to the input only during training
         if self.training and random.random() < 0.3:  # 30% chance to add noise to the batch (adjust to your needs)
-            x = x + torch.randn(x.shape) * 0.1 * (torch.max(x) - torch.min(x))  # up to 20% of the data range
+            noise = torch.randn(x.shape) * 0.1 * (float(torch.max(x)) - float(torch.min(x)))  # up to 10% noise ratio
+            # range
+            # move noise to the same device as x - super important!
+            noise = noise.to(x.device)
+            # add the noise to x
+            x = x + noise
         x = self.conv_1(x)
         x = self.batch_norm_1(x)
         x = functional.relu(x)

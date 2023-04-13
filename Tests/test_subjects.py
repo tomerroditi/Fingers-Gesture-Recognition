@@ -2,10 +2,10 @@ import mne.io.edf.edf
 import pytest
 import numpy as np
 from pathlib import Path
-from Source.recording import Recording
+from Source.data_manager import Recording
 from Source.pipelines import Data_Pipeline
 from Source import pipelines
-from Source.subject import Subject
+from Source.data_manager import Subject
 
 subjects_num = [1, 2, 5, 20, 30]
 num_files = [3, 2, 2, 1]
@@ -53,5 +53,13 @@ class Test_Subject:
         assert np.array_equal(data, np.concatenate([rec_feat for i in range(num_rec_in_subject)], axis=0))
         assert np.array_equal(labels, np.concatenate([rec_labels for i in range(num_rec_in_subject)], axis=0))
 
-
+    @pytest.mark.parametrize("subject, expected", [
+        (1, 6),
+        (2, 3),
+        (19, 1),
+    ])
+    def test_my_files(self, subject, expected):
+        my_subject = Subject(subject, Data_Pipeline())
+        paths = my_subject.my_files()
+        assert len(paths) == expected
 
