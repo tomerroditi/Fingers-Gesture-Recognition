@@ -26,7 +26,7 @@ class Data_Pipeline:
     acc_norm: str = 'none'  # none, zscore, 01, -11, quantile_#-# --> normalization method for the acc data
     features_norm: str = 'max'  # none, zscore, 01, -11, quantile_#-# --> normalization method for the features
     features_extraction_method: str = 'RMS'  # name of the method to extract features from segments, to see available
-    # methods see the "extractors" dictionary in the feature_extractors.py file.
+    # methods see the "extractors" dictionary in the data_manager.py file.
     features_extraction_params: dict = field(default_factory=dict)  # parameters for the features extraction method
 
 
