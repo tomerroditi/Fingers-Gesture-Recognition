@@ -299,14 +299,16 @@ class Recording:
         and that each consecutive start, stop annotations are of the same gesture, where targets are in the format of:
         Start_<gesture_name>_<number> and Release_<gesture_name>_<number>
         """
-        # reject unwanted annotations
+        # reject unwanted annotations - keep only gesture related ones
+        gesture_annotations = []
         for onset, description in annotations:
-            # TODO: maybe create a list of the wanted annotations and check if the description is in the list
             if description == 'Recording Started' or \
                description == 'Start Experiment' or \
-               description == 'App End Recording' or \
-               description == 'Experiment':
-                annotations.remove((onset, description))
+               description == 'App End Recording':
+                continue
+            else:
+                gesture_annotations.append((onset, description))
+        annotations = gesture_annotations
         # verify that the annotations are in the right order - start, stop, start, stop, etc.
         counter = {}
         verified_annotations = []
@@ -317,7 +319,7 @@ class Recording:
                     end_description = annotations[i + 1][1].replace('Release', '').replace('End', '').strip('_ ')
                     max_gesture_duration = self.pipeline.max_gesture_duration
                     if start_description != end_description:
-                        print(f'Error: annotation mismatch of {start_description} in time: {annotation[0]}'
+                        print(f'Warning: annotation mismatch of {start_description} in time: {annotation[0]}'
                               f'and {end_description} in time: {annotations[i + 1][0]},'
                               f' in the experiment: {self.experiment}')
                         continue

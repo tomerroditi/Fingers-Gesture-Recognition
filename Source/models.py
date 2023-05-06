@@ -105,35 +105,27 @@ class pre_training_utils:
         return fold_idx
 
     @staticmethod
-    def create_dataloaders(train_data: np.array, train_targets: np.array, test_data: np.array, test_targets: np.array,
-                           batch_size: int = 64) -> (DataLoader, DataLoader):
+    def create_dataloader(data: np.array, labels: np.array, batch_size: int = 64, drop_last: bool = True) -> (
+            DataLoader, DataLoader):
         """
         This function created data loaders from numpy arrays of data and targets (train and test)
         inputs:
-            train_data: numpy array of data for training
-            train_targets: numpy array of targets for training
-            test_data: numpy array of data for testing
-            test_targets: numpy array of targets for testing
+            data: numpy array of data
+            labels: numpy array of labels (should be integers)
             batch_size: int, the size of the batches to be used in the data loaders
+            drop_last: bool, if True the last batch will be dropped if it is smaller than the batch size
         outputs:
-            train_loader: DataLoader object, contains the training data
-            test_loader: DataLoader object, contains the testing data
+            data_loader: DataLoader object, contains the training data
         """
         # convert the data to torch tensors, and move them to the GPU if available
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        train_data = torch.from_numpy(train_data).float().to(device)
-        train_targets = torch.from_numpy(train_targets).long().to(device)
-        test_data = torch.from_numpy(test_data).float().to(device)
-        test_targets = torch.from_numpy(test_targets).long().to(device)
+        data = torch.from_numpy(data).float().to(device)
+        labels = torch.from_numpy(labels).long().to(device)
+        # create the data loader
+        dataset_torch = TensorDataset(data, labels)
+        dataloader = DataLoader(dataset_torch, batch_size=batch_size, shuffle=True, drop_last=drop_last)
 
-        train_dataset_torch = TensorDataset(train_data, train_targets)
-        test_dataset_torch = TensorDataset(test_data, test_targets)
-
-        train_dataloader = DataLoader(train_dataset_torch, batch_size=batch_size, shuffle=True,
-                                      drop_last=True)
-        test_dataloader = DataLoader(test_dataset_torch, batch_size=batch_size, shuffle=False)
-
-        return train_dataloader, test_dataloader
+        return dataloader
 
 
 class simple_CNN(nn.Module):
@@ -144,131 +136,103 @@ class simple_CNN(nn.Module):
         self.loss_vals = {}
         self.train_data = np.empty(0)
         self.train_labels = np.empty(0)
-        self.test_data = np.empty(0)
-        self.test_labels = np.empty(0)
+        self.val_data = np.empty(0)
+        self.val_labels = np.empty(0)
 
     def cv_fit_model(self, data: np.array, labels: np.array, num_folds: int = 5, batch_size: int = 64,
-                     lr: float = 0.001, l2_weight: float = 0.0001, num_epochs: int = 200) -> \
-            (list[nn.Module], list[float]):
+                     lr: float = 0.001, l2_weight: float = 0.0001, num_epochs: int = 200) -> list[nn.Module]:
+        """
+        This function performs cross validation training on the model
+        inputs:
+            data: numpy array of data
+            labels: numpy array of labels
+            num_folds: int, the number of folds to split the data to
+            batch_size: int, the size of the batches to be used in the data loaders
+            lr: float, the learning rate to be used in the optimizer
+            l2_weight: float, the weight of the l2 regularization
+            num_epochs: int, the number of epochs to train the model
+        outputs:
+            models: list of models, each model is a copy of the original model fitted on a different fold
+        """
         fold_idx = pre_training_utils.folds_split_by_gesture(labels, num_folds)
         # fit the label encoder
         self.label_encoder.fit(np.char.strip(labels, '_0123456789'))
         # cv training loop
-        cv_scores = []
         models = []
         for fold in np.unique(fold_idx):
             curr_model = copy.deepcopy(self)  # create a copy of the model for each fold
             # split the data to train and test of the current fold
             train_idx = fold_idx != fold
-            test_idx = fold_idx == fold
-            curr_model.train_data = data[train_idx]
-            curr_model.train_labels = labels[train_idx]
-            curr_model.test_data = data[test_idx]
-            curr_model.test_labels = labels[test_idx]
-            # train the model, notice that we are using the labels without the repetition and subject number
-            train_labels = self.label_encoder.transform(np.char.strip(curr_model.train_labels, '_0123456789'))
-            test_labels = self.label_encoder.transform(np.char.strip(curr_model.test_labels, '_0123456789'))
-            train_loader, test_loader = \
-                pre_training_utils.create_dataloaders(curr_model.train_data, train_labels, curr_model.test_data,
-                                                      test_labels, batch_size)
-            optimizer = torch.optim.Adam(curr_model.parameters(), lr=lr, weight_decay=l2_weight)
-            loss_func = nn.CrossEntropyLoss()
-            curr_model.train_model(train_loader, test_loader, num_epochs, optimizer, loss_func)
+            val_idx = fold_idx == fold
+            curr_model.fit_model(data[train_idx], labels[train_idx], data[val_idx], labels[val_idx], batch_size, lr,
+                                 l2_weight, num_epochs)
             models.append(curr_model)
-            cv_scores.append(curr_model.accu_vals['val'][-1])
 
-        return models, cv_scores
+        return models
 
-    def fit_model(self, data: np.array, labels: np.array, test_size: float = 0.2, batch_size: int = 64, lr=0.001,
-                  l2_weight: float = 0.0001, num_epochs: int = 200, test_data: np.array = None,
-                  test_labels: np.array = None) -> None:
+    def fit_model(self, train_data: np.array, train_labels: np.array, val_data: np.array = None,
+                  val_labels: np.array = None, batch_size: int = 64, lr=0.001,
+                  l2_weight: float = 0.0001, num_epochs: int = 200) -> None:
         """This function trains a model and returns the train and test loss and accuracy"""
-        if test_data is None:
-            # split the data to train and test
-            train_data, test_data, train_labels, test_labels = \
-                pre_training_utils.train_test_split_by_gesture(data, labels=labels, test_size=test_size)
-        else:
-            if test_labels is None:
-                raise ValueError('test_labels must be provided if test_data is provided')
-            train_data = data
-            train_labels = labels
+        if val_data is not None and val_labels is None:
+            raise ValueError('If test data is provided, test labels must be provided as well')
 
         # save the data and labels for later use
         self.train_data = train_data
-        self.test_data = test_data
         self.train_labels = train_labels
-        self.test_labels = test_labels
+        self.val_data = val_data
+        self.val_labels = val_labels
 
         # strip the labels from the numbers - the model will predict the gesture name and not the repetition number or
         # subject number (the numbers are used for data splitting)
         train_labels = np.char.strip(train_labels, '_0123456789')
-        test_labels = np.char.strip(test_labels, '_0123456789')
-
         train_labels = self.label_encoder.fit_transform(train_labels)
-        test_labels = self.label_encoder.transform(test_labels)
-
         # create data loaders
-        train_dataloader, test_dataloader = pre_training_utils.create_dataloaders(train_data, train_labels, test_data,
-                                                                                  test_labels, batch_size=batch_size)
+        train_dl = pre_training_utils.create_dataloader(train_data, train_labels, batch_size, drop_last=True)
+
+        val_dl = None
+        if val_labels is not None:
+            val_labels = np.char.strip(val_labels, '_0123456789')
+            val_labels = self.label_encoder.transform(val_labels)
+            val_dl = pre_training_utils.create_dataloader(val_data, val_labels, batch_size, drop_last=False)
+
         # train the model
         optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=l2_weight)
         loss_func = nn.CrossEntropyLoss()
-
         # move the model to the gpu if available
         if torch.cuda.is_available():
             self.cuda()
 
-        self.train_model(train_dataloader, test_dataloader, num_epochs, optimizer, loss_func)
+        self.train_model(train_dl, val_dl, num_epochs, optimizer, loss_func)
 
-    def train_model(self, train_dataloader: DataLoader, test_dataloader: DataLoader, num_epochs: int,
+    def train_model(self, train_dataloader: DataLoader, val_dataloader: DataLoader, num_epochs: int,
                     optimizer, loss_function):
         # TODO: add type hints for optimizer and loss_function
         # initialize the variables for the loss and accuracy plotting
-        self.training = True  # flag for the gui
         self.loss_vals = {'train': [], 'val': []}  # loss history
         self.accu_vals = {'train': [], 'val': []}
-        x_epoch = []  # epoch history
+        x_epoch = range(num_epochs)
 
-        # # gui
-        # plt.ion()
-        #
-        # # create a plot for the loss and accuracy starting from epoch 0
-        # fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-        # ax1.set_title('Loss'), ax1.set_xlabel('Epoch'), ax1.set_ylabel('Loss')
-        # ax2.set_title('Accuracy'), ax2.set_xlabel('Epoch'), ax2.set_ylabel('Accuracy')
-        # loss_train_line, = ax1.plot(x_epoch, self.loss_vals['train'], label='train')
-        # loss_val_line, = ax1.plot(x_epoch, self.loss_vals['val'], label='val')
-        # accu_train_line, = ax2.plot(x_epoch, self.accu_vals['train'], label='train')
-        # accu_val_line, = ax2.plot(x_epoch, self.accu_vals['val'], label='val')
-        # plt.show()
-
-        for epoch in tqdm(range(num_epochs), desc='training model', unit='epoch'):
+        for _ in tqdm(range(num_epochs), desc='training model', unit='epoch'):
             self.float()
             self.train()
             self._train_loop(train_dataloader, loss_function, optimizer)
             self.eval()
-            self._test_loop(test_dataloader, loss_function)
-            x_epoch.append(epoch)
-            # if epoch % 30 == 0: # update the plot with the new loss and accuracy
-            #     loss_train_line.set_xdata(x_epoch)
-            #     loss_train_line.set_ydata(self.loss_vals['train'])
-            #     loss_val_line.set_xdata(x_epoch)
-            #     loss_val_line.set_ydata(self.loss_vals['val'])
-            #     accu_train_line.set_xdata(x_epoch)
-            #     accu_train_line.set_ydata(self.accu_vals['train'])
-            #     accu_val_line.set_xdata(x_epoch)
-            #     accu_val_line.set_ydata(self.accu_vals['val'])
-            #     ax1.relim()
-            #     ax1.autoscale_view()
-            #     ax2.relim()
-            #     ax2.autoscale_view()
-            #     fig.canvas.draw()
-            #     fig.canvas.flush_events()
-        #
-        # plt.ioff()
-        # plt.show()
+            self._val_loop(val_dataloader, loss_function)
 
-        self.training = False
+        # create a plot for the loss and accuracy in the training process
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))  # subplot for loss and accuracy
+        ax1.set_title('Loss'), ax1.set_xlabel('Epoch'), ax1.set_ylabel('Loss')
+        ax2.set_title('Accuracy'), ax2.set_xlabel('Epoch'), ax2.set_ylabel('Accuracy')
+        # train graph
+        ax1.plot(x_epoch, self.loss_vals['train'], label='train')
+        ax2.plot(x_epoch, self.accu_vals['train'], label='train')
+        # validation graph
+        if val_dataloader is not None:
+            ax1.plot(x_epoch, self.loss_vals['val'], label='val')
+            ax2.plot(x_epoch, self.accu_vals['val'], label='val')
+        plt.show()
+
         print("Done Training!")
 
     def _train_loop(self, dataloader, loss_fn, optimizer) -> None:
@@ -287,10 +251,12 @@ class simple_CNN(nn.Module):
         self.loss_vals['train'].append(train_loss)  # average loss per batch
         self.accu_vals['train'].append(train_accu * 100)  # accuracy in percent
 
-    def _test_loop(self, dataloader, loss_fn) -> None:
-        test_loss, test_accu = self._calc_loss_accu(dataloader, loss_fn)
-        self.loss_vals['val'].append(test_loss)  # average loss per batch
-        self.accu_vals['val'].append(test_accu * 100)  # accuracy in percent
+    def _val_loop(self, dataloader, loss_fn) -> None:
+        if dataloader is None:
+            return
+        val_loss, val_accu = self._calc_loss_accu(dataloader, loss_fn)
+        self.loss_vals['val'].append(val_loss)  # average loss per batch
+        self.accu_vals['val'].append(val_accu * 100)  # accuracy in percent
 
     def _calc_loss_accu(self, dataloader, loss_fn) -> (float, float):
         loss, correct = 0, 0
@@ -362,9 +328,8 @@ class Net(simple_CNN):
 
     def forward(self, x):
         # add white gaussian noise to the input only during training
-        if self.training and random.random() < 0.3:  # 30% chance to add noise to the batch (adjust to your needs)
-            noise = torch.randn(x.shape) * 0.1 * (float(torch.max(x)) - float(torch.min(x)))  # up to 10% noise ratio
-            # range
+        if self.training and random.random() < 0:  # % chance to add noise to the batch (adjust to your needs)
+            noise = torch.randn(x.shape) * 0.1 * (float(torch.max(x)) - float(torch.min(x)))  # up to 10% noise
             # move noise to the same device as x - super important!
             noise = noise.to(x.device)
             # add the noise to x

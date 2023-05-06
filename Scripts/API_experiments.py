@@ -32,7 +32,7 @@ data_train = data_train.reshape(data_train.shape[0], 1, 4, 4)  # reshape to fit 
 model = models.Net(num_classes=10, dropout_rate=0.3)
 model.fit_model(data_train, labels_train, num_epochs=200, batch_size=64, lr=0.001, l2_weight=0.0001)
                 # test_data=data_test, test_labels=labels_test)
-model.evaluate_model(model.test_data, model.test_labels, cm_title='model results')
+model.evaluate_model(model.val_data, model.val_labels, cm_title='model results')
 
 # models, accuracies = model.cv_fit_model(data, labels, num_epochs=200, batch_size=64, lr=0.001, l2_weight=0.0001)
 # # models evaluation
