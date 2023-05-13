@@ -1,7 +1,6 @@
-import numpy as np
-from Source.pipelines import Data_Pipeline
-from Source.data_manager import Data_Manager
-import Source.models as models
+from Source.fgr.pipelines import Data_Pipeline
+from Source.fgr.data_manager import Data_Manager
+import Source.fgr.models as models
 from warnings import simplefilter
 
 # ignore all future warnings

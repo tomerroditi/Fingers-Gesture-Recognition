@@ -1,11 +1,9 @@
 import pytest
 import numpy as np
 import mne
-from Source.pipelines import Data_Pipeline
-from Source.data_manager import Recording
+from Source.fgr.pipelines import Data_Pipeline
+from Source.fgr.data_manager import Recording
 from pathlib import Path
-from Source import pipelines
-from _pytest.monkeypatch import monkeypatch
 
 
 @pytest.fixture(scope = "session")
