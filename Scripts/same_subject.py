@@ -1,5 +1,5 @@
-from Source.pipelines import Data_Pipeline
-from Source.data_manager import Data_Manager
+from Source.fgr.pipelines import Data_Pipeline
+from Source.fgr.data_manager import Data_Manager
 
 # %% an example of how to use the data manager
 my_subject = 1

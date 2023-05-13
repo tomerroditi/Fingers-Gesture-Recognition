@@ -1,11 +1,9 @@
-import mne.io.edf.edf
 import pytest
 import numpy as np
 from pathlib import Path
-from Source.data_manager import Recording
-from Source.pipelines import Data_Pipeline
-from Source import pipelines
-from Source.data_manager import Subject
+from Source.fgr.data_manager import Recording
+from Source.fgr.pipelines import Data_Pipeline
+from Source.fgr.data_manager import Subject
 
 subjects_num = [1, 2, 5, 20, 30]
 num_files = [3, 2, 2, 1]

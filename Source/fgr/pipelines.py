@@ -1,7 +1,7 @@
+import torch.nn
+
 from dataclasses import dataclass, field
 from pathlib import Path
-
-import torch.nn
 
 
 @dataclass  # useful wrapper to make a class with only attributes and no methods (like a struct)
@@ -15,6 +15,7 @@ class Data_Pipeline:
     annotation_delay_end: float = 0.1  # the delay between the annotation and the end of the gesture in seconds,
     # when we segment the data (in discrete mode) we will end the segment at the annotation time - this delay
     segmentation_type: str = 'discrete'  # discrete or continuous segmentation protocol
+    # todo: check if the fs can be retrieved from the edf file
     emg_sample_rate: int = 4000  # sample rate in HZ
     acc_sample_rate: int = 4000  # sample rate in HZ
     segment_length_sec: float = 0.6  # the length of the segments in seconds

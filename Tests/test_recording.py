@@ -1,9 +1,7 @@
-import mne.io.edf.edf
 import pytest
 import numpy as np
-from pathlib import Path
-from Source.data_manager import Recording
-from Source.pipelines import Data_Pipeline
+from Source.fgr.data_manager import Recording
+from Source.fgr.pipelines import Data_Pipeline
 
 
 class Test_Recording:

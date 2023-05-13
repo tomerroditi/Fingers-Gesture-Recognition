@@ -1,19 +1,63 @@
 import copy
 import random
-
+import numpy as np
 import sklearn.preprocessing
 import torch.optim
-from sklearn.preprocessing import LabelEncoder
 import matplotlib.pyplot as plt
 import torch.nn as nn
 import torch
 import torch.nn.functional as functional
+
 from torch.utils.data import TensorDataset, DataLoader
 from tqdm import tqdm
-import numpy as np
+from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split, StratifiedKFold
+from datetime import datetime
+
+from Source.streamer.data import Data, ConnectionTimeoutError
+from Source.fgr.data_manager import Real_Time_Recording
+from Source.fgr.pipelines import Data_Pipeline
 
 
+##############################################
+# Predictors
+##############################################
+class Real_Time_Predictor:
+    def __init__(self, model, data_stream: Data, pipeline: Data_Pipeline, vote_over: int = 10, max_timeout: float = 15):
+        self.recording = Real_Time_Recording(data_stream, pipeline)
+        self.model = model
+        self.vote_over = vote_over
+        self.predictions_stack = []
+
+        # Confirm initial data retrieval before continuing (or raise Error if timeout)
+        init_time = datetime.now()
+        while not (data_stream.is_connected and data_stream.has_data):
+            plt.pause(0.01)
+            if (datetime.now() - init_time).seconds > max_timeout:
+                if not data_stream.is_connected:
+                    raise ConnectionTimeoutError
+                elif not data_stream.has_data:
+                    raise TimeoutError(f"Did not succeed to stream data within {max_timeout} seconds.")
+
+    def majority_vote_predict(self) -> (str, float):
+        feats = self.recording.get_feats_for_prediction()
+        pred = self.model.classify(feats)
+        self.predictions_stack.append(pred)
+        if len(self.predictions_stack) > self.vote_over:
+            self.predictions_stack.pop(0)
+        if len(self.predictions_stack) < self.vote_over:
+            return 'loading predictions...', 1
+
+        majority = max(set(self.predictions_stack), key=self.predictions_stack.count)
+        confidence = self.predictions_stack.count(majority) / len(self.predictions_stack)
+        return majority, confidence
+
+# todo: add a class for batch prediction (for offline prediction)
+
+
+##############################################
+# Models
+##############################################
 class pre_training_utils:
     @staticmethod
     def train_test_split_by_gesture(*arrays: np.array, labels: np.array = None, test_size: float = 0.2, seed: int = 42)\
@@ -236,7 +280,6 @@ class simple_CNN(nn.Module):
         print("Done Training!")
 
     def _train_loop(self, dataloader, loss_fn, optimizer) -> None:
-        size = len(dataloader.dataset)
         for batch, (X, y) in enumerate(dataloader):
             # Compute prediction and loss
             pred = self(X.float())
@@ -264,7 +307,7 @@ class simple_CNN(nn.Module):
             for X, y in dataloader:
                 pred = self(X.float())
                 loss += loss_fn(pred, y.long()).item()
-                correct += (pred.argmax(1) == y).type(torch.float).sum().item()
+                correct += (pred.argmax(1) == y).type(torch.float).sum().item()  # noqa
         accu = correct / len(dataloader.dataset)
         loss = loss / len(dataloader)
         return loss, accu
@@ -296,7 +339,7 @@ class simple_CNN(nn.Module):
         cm_disp.ax_.set_title(f'{cm_title} - Accuracy: {accuracy:.3f}')
         return accuracy
 
-    def classify(self, data: np.array):
+    def classify(self, data: np.array) -> np.array:
         """classify the data according to the model's label encoder"""
         # convert the data to a tensor and allocate to the same device as the model
         device = next(self.parameters()).device
@@ -352,5 +395,3 @@ class Net(simple_CNN):
         x = self.fc_3(x)
         x = functional.softmax(x, dim=1)
         return x
-
-

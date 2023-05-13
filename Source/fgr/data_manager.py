@@ -11,6 +11,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from math import floor
 from typing import TypeVar
+from Source.streamer.data import Data
+
 
 Data_Pipeline = TypeVar("Data_Pipeline")
 mne.set_log_level('WARNING')  # disable mne function's printing except warnings
@@ -70,7 +72,7 @@ class Data_Manager:
               f'Starting to extract datasets')
 
         datasets = []
-        for exp in tqdm(experiments_in_datasets, desc='Loading experiments datasets', unit='exp'):
+        for exp in tqdm(experiments_in_datasets, desc='Loading experiments datasets', unit='exp'):  # noqa
             for subject in self.subjects:
                 if subject.get_my_experiments(exp):
                     datasets.append(subject.get_dataset(exp))
@@ -146,7 +148,7 @@ class Subject:
         files = self.experiment_files(files)
         recordings = [Recording(paths, self.data_pipeline) for paths in files]
         if load_data:
-            [rec.load_file() for rec in tqdm(recordings, desc='Loading recordings files', leave=False, unit='rec')]
+            [rec.load_file() for rec in tqdm(recordings, desc='Loading recordings files', leave=False, unit='rec')]  # noqa
         return recordings
 
     def my_files(self) -> list[Path]:
@@ -231,7 +233,7 @@ class Recording:
         self.features: np.array = np.empty(0)  # np.array, stacked on dim 0
         self.synthetic_features: np.array = np.empty(0)  # np.array, stacked on dim 0
         self.synthetic_labels: np.array = np.empty(0)  # np.array, stacked on dim 0
-        self.gesture_counter: dict = {}  # dict of the number of repetitions of each gesture
+        self.gesture_counter: dict = {}  # dict of the number of repetitions of each gesture, currently not used
 
     @staticmethod
     def file_path_to_experiment(file_path: Path) -> str:
@@ -259,7 +261,6 @@ class Recording:
     def load_file(self):
         """this function loads the files data and sets the raw_edf and annotations field.
         in the future we might insert here the handling of merging files of part1, part2, etc. to one file"""
-        # TODO: we need to add raw files fixing as well (deleting the bad data, removing bad annotations, etc.)
 
         files_names = [str(path) for path in self.files_path]
         files_names.sort()  # part1, part2, etc. should be in order
@@ -545,6 +546,97 @@ class Recording:
         return False
 
 
+class Real_Time_Recording:
+    def __init__(self, data_streamer: Data, pipeline: Data_Pipeline):
+        self.data_streamer = data_streamer
+        self.pipeline = pipeline
+        self.latest_segment = None  # currenly includes only the emg data
+        self.latest_features = None
+
+    def get_feats_for_prediction(self) -> np.array:
+        """
+        The main function of the class, this should be the only function called from outside the class.
+        This function is responsible for fetching the latest segment from the data streamer, preprocess it and return
+        the features ready for prediction.
+
+        Note: currently this class only takes care of the emg data since the streamer class doesn't support acc and gyro data yet.
+            once the streamer class will support acc and gyro data, this class will be updated to support them as well.
+        """
+        self._fetch_latest_segment()
+        self._preprocess_latest_segment()
+        return self.latest_features
+
+    def _fetch_latest_segment(self) -> None:
+        """fetch the latest segment from the data streamer"""
+        self.latest_segment = self.data_streamer.exg_data[-self.data_streamer.fs_exg * self.pipeline.segment_length_sec:, :]
+
+    def _preprocess_latest_segment(self) -> None:
+        """
+        preprocess the segment according to the data pipeline
+        - filter the data
+        - normalize the data
+        - extract features
+        - normalize the features
+        all the preprocessing steps are done in place, meaning that the data is changed in the object.
+        """
+        self._filter_segment()
+        self._normalize_segment()
+        self._extract_features()
+        self._normalize_features()
+
+    def _filter_segment(self) -> None:
+        # todo: check the order of the filters, decide what order to use.
+        # todo: figure out if filtering the accelerometer data is necessary
+        """filter the signal according to the data pipeline (currently only the EMG, acc will be added later here)"""
+        fs = self.data_streamer.fs_exg
+        l_freq = self.pipeline.emg_low_freq
+        h_freq = self.pipeline.emg_high_freq
+        notch = self.pipeline.emg_notch_freq
+        if l_freq or h_freq:
+            self.latest_segment = mne.filter.filter_data(self.latest_segment, sfreq=fs, l_freq=l_freq, h_freq=h_freq, method='iir', verbose=False)
+        if notch:
+            self.latest_segment = mne.filter.notch_filter(self.latest_segment, Fs=fs, freqs=notch, method='iir', verbose=False)
+
+    def _normalize_segment(self) -> None:
+        self.latest_segment = self._norm_me(self.latest_segment, self.pipeline.emg_norm)
+
+    def _extract_features(self) -> None:
+        feature_extractor = build_feature_extractor(self.pipeline.features_extraction_method)
+        self.latest_features = feature_extractor.extract_features(self.latest_segment, **self.pipeline.features_extraction_params)
+
+    def _normalize_features(self) -> None:
+        self.latest_features = self._norm_me(self.latest_features, self.pipeline.features_norm)
+
+    @staticmethod
+    def _norm_me(data: np.array, norm_type: str) -> np.array:
+        if norm_type == 'zscore':
+            mean = np.mean(data, keepdims=True)
+            std = np.std(data, keepdims=True)
+            data = (data - mean) / std
+        elif norm_type == '01':
+            min_ = np.min(data, keepdims=True)
+            max_ = np.max(data, keepdims=True)
+            data = (data - min_) / (max_ - min_)
+        elif norm_type == '-11':
+            min_ = np.min(data, keepdims=True)
+            max_ = np.max(data, keepdims=True)
+            data = 2 * (data - min_) / (max_ - min_) - 1
+        elif 'quantile' in norm_type:
+            quantiles = norm_type.split('_')[1].split('-')
+            quantiles = [float(q) for q in quantiles]
+            low_quantile = np.quantile(data, quantiles[0], keepdims=True)
+            high_quantile = np.quantile(data, quantiles[1], keepdims=True)
+            data = (data - low_quantile) / (high_quantile - low_quantile)
+        elif norm_type == 'max':
+            max_ = np.max(data, keepdims=True)
+            data = data / max_
+        elif norm_type == 'none':
+            pass
+        else:
+            raise ValueError('Invalid normalization method for EMG data')
+        return data
+
+
 ######################################################
 # Feature Extractors
 ######################################################
@@ -564,7 +656,7 @@ class Feature_Extractor(ABC):
 
 
 class RMS_Feature_Extractor(Feature_Extractor):
-    def extract_features(self, segments: (np.array, np.array), **kwargs) -> np.array:
+    def extract_features(self, segments: (np.array, np.array), output_shape: tuple = (1, 4, 4)) -> np.array:
         """
         extract the RMS of each emg channel and reshape into a 4x4 array.
         input:
@@ -572,11 +664,23 @@ class RMS_Feature_Extractor(Feature_Extractor):
             num_channels, segment_length) where num_channels is constant 16, acc_segments is a 3d array of shape
             (num_segments, num_channels, segment_length) where num_channels is constant 3 (x, y, z - not in that order)
             kwargs: not used
+            output_shape: the shape of the output array of each segment, not including the number of segments which will be set as the first
+            dimension (dim 0). the sum of the elements in the tuple must be equal to the number of emg channels - 16.
         output:
             features: array of shape (num_segments, 4, 4)
         """
         emg_data, acc_data = segments
-        features = np.sqrt(np.mean(np.square(emg_data), axis=2))
+
+        if emg_data.ndim == 3:  # offline analysis
+            axis = 2
+            n_windows = emg_data.shape[0]
+        else:  # online analysis
+            axis = 1
+            emg_data = emg_data.T if emg_data.shape[0] > emg_data.shape[1] else emg_data
+            n_windows = 1
+
+        rms = np.atleast_2d(np.sqrt(np.mean(np.square(emg_data), axis=axis)))
+        features = rms.reshape(n_windows, *output_shape)  # reshape to the desired output shape
         return features
 
 
