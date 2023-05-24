@@ -74,7 +74,7 @@ class Experiment:
 
         # make sure the save dir exists and guve the future file a unique name according to the experiment info
         os.makedirs(data_dir, exist_ok=True)
-        self.data.save_as = Path(data_dir, f"GR_pos{exp_info['position']}_{exp_info['participant'].rjust(3, '0')}_S{exp_info['session']}_BT.edf")
+        self.data.save_as = str(Path(data_dir, f"GR_pos{exp_info['position']}_{exp_info['participant'].rjust(3, '0')}_S{exp_info['session']}_BT.edf"))
 
         # start recording data
         self.data.start()
