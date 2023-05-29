@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 import mne
 from Source.fgr.pipelines import Data_Pipeline
-from Source.fgr.data_manager import Recording
+from Source.fgr.data_manager import Recording_Emg_Acc
 from pathlib import Path
 
 
@@ -53,7 +53,7 @@ def real_file_path(request):
 
 @pytest.fixture(scope = 'session')
 def test_recording_with_loaded_data():
-    """This fixture initialize a Recording object with a real file path but loads synthetic data"""
+    """This fixture initialize a Recording_Emg_Acc object with a real file path but loads synthetic data"""
     num_electrodes = 16
     sinus_signal = [np.sin(np.arange(0, 10, 0.00025)*np.pi/(freq*10))for freq in range(num_electrodes)]
     time = np.arange(0, 10, 0.00025)
@@ -66,7 +66,7 @@ def test_recording_with_loaded_data():
                    (9.2, 'Start_ThreeFingers'), (9.7, 'Release_ThreeFingers')]
     pipeline = Data_Pipeline()
 
-    rec_for_testing = Recording(real_file_paths[0], pipeline)
+    rec_for_testing = Recording_Emg_Acc(real_file_paths[0], pipeline)
     rec_for_testing.raw_edf = mne.io.edf.edf.RawEDF()
     rec_for_testing.annotations = annotations
     rec_for_testing.time = time

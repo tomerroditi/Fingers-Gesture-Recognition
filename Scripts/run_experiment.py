@@ -8,7 +8,7 @@ from Source.streamer.data import Data
 from Source.streamer.viz import Viz
 from Source.fgr.data_collection import Experiment
 from Source.fgr import models
-from Source.fgr.data_manager import Recording
+from Source.fgr.data_manager import Recording_Emg_Acc
 from Source.fgr.pipelines import Data_Pipeline
 
 
@@ -50,7 +50,8 @@ print('Data collection complete. Beginning model creation...')
 """ MODEL CREATION """
 
 # Get data and labels
-rec_obj = Recording([data_collector.save_as], Data_Pipeline())  # noqa - the save_as param is updated in the experiment.run() method
+rec_obj = Recording_Emg_Acc([Path(data_collector.save_as)], Data_Pipeline())  # noqa - the save_as param is updated in the
+# experiment.run() method
 X, labels = rec_obj.get_dataset()
 
 # Train models

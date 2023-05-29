@@ -7,6 +7,7 @@ from pathlib import Path
 @dataclass  # useful wrapper to make a class with only attributes and no methods (like a struct)
 class Data_Pipeline:
     """this class is a dataclass that holds the parameters for data preprocessing"""
+    available_data: str = 'emg'
     base_data_files_path: Path = Path(r'I:\My Drive\finger gesture recognition')
     max_gesture_duration: float = 7  # the supposed maximum duration of a gesture in seconds (depends on the
     # protocol), it is used to detect corrupted annotations.

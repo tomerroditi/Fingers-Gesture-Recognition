@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 from pathlib import Path
-from Source.fgr.data_manager import Recording
+from Source.fgr.data_manager import Recording_Emg_Acc
 from Source.fgr.pipelines import Data_Pipeline
 from Source.fgr.data_manager import Subject
 
@@ -42,7 +42,7 @@ class Test_Subject:
     def test_get_dataset_without_synthetics(self, monkeypatch):
         my_subject = Subject(1, Data_Pipeline())
         num_rec_in_subject = 3
-        rec = Recording(Path(r'c:\001_pos1_S1'), Data_Pipeline())
+        rec = Recording_Emg_Acc(Path(r'c:\001_pos1_S1'), Data_Pipeline())
         rec_feat = np.random.rand(3, 4, 4)
         rec_labels = ['a', 'b', 'c']
         monkeypatch.setattr(rec, 'get_dataset', lambda x: (rec_feat, rec_labels))
