@@ -1,14 +1,16 @@
 import os.path
 import pickle
 import numpy as np
+import time
 
 from datetime import datetime
 
+from pathlib import Path
 from Source.streamer.data import Data
 from Source.streamer.viz import Viz
 from Source.fgr.data_collection import Experiment
 from Source.fgr import models
-from Source.fgr.data_manager import Recording_Emg_Acc
+from Source.fgr.data_manager import Recording_Emg
 from Source.fgr.pipelines import Data_Pipeline
 
 
@@ -16,7 +18,7 @@ from Source.fgr.pipelines import Data_Pipeline
 
 host_name = "127.0.0.1"  # IP address from which to receive data
 port = 20001  # Local port through which to access host
-n_repetitions = 10  # Number of repetitions of each gesture during data collection
+n_repetitions = 2  # Number of repetitions of each gesture during data collection
 signal_check = False  # View real-time signals as signal quality check? Note: running this precludes PsychoPy (idk why) so run it once with True then run again with False
 
 """SIGNAL CHECK """
@@ -35,50 +37,35 @@ if signal_check:
 
 start_time = datetime.now()
 
-timeout = 15  # if streaming is interrupted for this many seconds or longer, terminate program
+timeout = 30  # if streaming is interrupted for this many seconds or longer, terminate program
 verbose = False  # if to print to console BT packet summary (as sanity check) upon each received packet
 data_collector = Data(host_name, port, timeout_secs=timeout, verbose=verbose)
 
 # PsychoPy experiment
-data_dir = 'data'
+data_dir = str(Path(os.path.dirname(os.path.abspath(__file__))).parent / 'data')
 exp = Experiment()
-exp.run(data_collector, data_dir, n_repetitions=n_repetitions, fullscreen=False, img_secs=3, screen_num=0)
+file_path = exp.run(data_collector, data_dir, n_repetitions=n_repetitions, fullscreen=False, img_secs=3, screen_num=0)
 
 calibration_time = datetime.now()
 print('Data collection complete. Beginning model creation...')
 
 """ MODEL CREATION """
-
+time.sleep(1)
 # Get data and labels
-rec_obj = Recording_Emg_Acc([Path(data_collector.save_as)], Data_Pipeline())  # noqa - the save_as param is updated in the
-# experiment.run() method
+pipe = Data_Pipeline(emg_sample_rate=250, emg_low_freq=35, emg_high_freq=124)
+rec_obj = Recording_Emg([Path(file_path)], pipe)
 X, labels = rec_obj.get_dataset()
 
 # Train models
 n_models = min(5, n_repetitions)
-n_classes = len(os.listdir('images'))
+n_classes = 10
 model = models.Net(num_classes=n_classes, dropout_rate=0.1)
-models, accuracies = model.cv_fit_model(X, labels,
-                                        num_epochs=200,
-                                        batch_size=64,
-                                        lr=0.001,
-                                        l2_weight=0.0001,
-                                        num_folds=n_models)
+models, accu_vals = model.cv_fit_model(X, labels, num_epochs=150, batch_size=64, lr=0.001, l2_weight=0.0001,
+                                       num_folds=n_models)
 
 # Evaluate models
-print(f'model average accuracy: {np.mean(accuracies)}')
-accs = []
-for i, model in enumerate(models):
-    accs.append(model.evaluate_model(model.test_data, model.test_labels, cm_title='model number ' + str(i)))
-
-# Save best model
-best_acc = np.argmax(accs)
-print(f'best model test accuracy: {accs[best_acc] * 100:0.2f}%')
-model_fp = rf'models\{os.path.basename(os.path.splitext(data_collector.save_as)[0])}_{n_classes}gestures_{accs[best_acc] * 100:0.2f}%.pkl'
-os.makedirs('models', exist_ok=True)
-with open(model_fp, 'wb') as f:
-    pickle.dump(models[best_acc], f)
-    print(f'Saved model to {model_fp}')
+print(f'model average accuracy: {np.mean(accu_vals)}')
+print(f'best model test accuracy: {np.max(accu_vals) * 100:0.2f}%')
 
 end_time = datetime.now()
 calibration_duration = calibration_time - start_time

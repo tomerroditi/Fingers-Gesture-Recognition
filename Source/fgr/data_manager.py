@@ -152,7 +152,6 @@ class Subject:
         elif self.data_pipeline.available_data == 'emg_acc_gyro':
             raise NotImplementedError
 
-        recordings = [Recording_Emg_Acc(paths, self.data_pipeline) for paths in files]
         if load_data:
             [rec.load_file() for rec in
              tqdm(recordings, desc='Loading recordings files', leave=False, unit='rec')]  # noqa
@@ -221,9 +220,12 @@ class Subject:
 
 
 class Recording_Emg:
-    emg_chan_order = ['EMG Ch-1', 'EMG Ch-2', 'EMG Ch-3', 'EMG Ch-4', 'EMG Ch-5', 'EMG Ch-6', 'EMG Ch-7', 'EMG Ch-8',
-                      'EMG Ch-9', 'EMG Ch-10', 'EMG Ch-11', 'EMG Ch-12', 'EMG Ch-13', 'EMG Ch-14', 'EMG Ch-15',
-                      'EMG Ch-16']
+    emg_chan_order_1 = ['EMG Ch-1', 'EMG Ch-2', 'EMG Ch-3', 'EMG Ch-4', 'EMG Ch-5', 'EMG Ch-6', 'EMG Ch-7', 'EMG Ch-8',
+                        'EMG Ch-9', 'EMG Ch-10', 'EMG Ch-11', 'EMG Ch-12', 'EMG Ch-13', 'EMG Ch-14', 'EMG Ch-15',
+                        'EMG Ch-16']
+    emg_chan_order_2 = ['Channel 0', 'Channel 1', 'Channel 2', 'Channel 3', 'Channel 4', 'Channel 5', 'Channel 6',
+                        'Channel 7', 'Channel 8', 'Channel 9', 'Channel 10', 'Channel 11', 'Channel 12', 'Channel 13',
+                        'Channel 14', 'Channel 15']
 
     def __init__(self, files_path: list[Path], pipeline: Data_Pipeline):
         self.files_path: list[Path] = files_path
@@ -242,6 +244,8 @@ class Recording_Emg:
         """
         extract the experiment name from the file path, currently the file name is in the form of:
         'GR_pos#_###_S#_part#_Recording_00_SD_edited.edf'
+        or
+        'GR_pos#_###_S#_part#_rep#_Recording_00_SD_edited.edf'
         and we want to extract the experiment in the form of: 'subject_session_position'
         """
         file_name_parts = file_path.stem.split('_')
@@ -252,9 +256,16 @@ class Recording_Emg:
                 position = name[3:]
             elif len(name) == 3 and name.isdigit():
                 subject = name
+            elif 'rep' in name:
+                repetition = name.strip('rep')[0]
         try:
-            # noinspection PyUnboundLocalVariable
-            experiment = f'{subject}_{session}_{position}'
+
+            if 'repetition' in locals():  # online training sessions
+                # noinspection PyUnboundLocalVariable
+                experiment = f'{subject}_{session}_{position}_{repetition}'
+            else:
+                # noinspection PyUnboundLocalVariable
+                experiment = f'{subject}_{session}_{position}'
         except NameError:
             raise NameError(f'Error: could not extract experiment name from file path: {file_path}.'
                             f'pls check the file name format.')
@@ -268,8 +279,16 @@ class Recording_Emg:
         files_names.sort()  # part1, part2, etc. should be in order
         for file_name in files_names:
             raw_edf = mne.io.read_raw_edf(file_name, preload=True, stim_channel='auto', verbose=False)
-            curr_raw_edf_emg = raw_edf.copy().pick_channels(set(self.emg_chan_order))
-            curr_raw_edf_emg = curr_raw_edf_emg.reorder_channels(self.emg_chan_order)
+            channels_names = raw_edf.ch_names
+            if 'EMG Ch-1' in channels_names:
+                names = self.emg_chan_order_1
+            elif 'Channel 0' in channels_names:
+                names = self.emg_chan_order_2
+            else:
+                raise ValueError('no matching channels where found, pls check the recording channels names!')
+
+            curr_raw_edf_emg = raw_edf.copy().pick_channels(set(names))
+            curr_raw_edf_emg = curr_raw_edf_emg.reorder_channels(names)
             # concat files of the same experiment
             if self.raw_edf_emg is None:
                 self.raw_edf_emg = curr_raw_edf_emg
@@ -305,9 +324,10 @@ class Recording_Emg:
         verified_annotations = []
         for i, annotation in enumerate(annotations):
             if 'Start' in annotation[1]:
-                start_description = annotation[1].replace('Start', '').strip('_ ')
+                start_description = annotation[1].replace('Start', '').strip('_ ').replace('_', ' ')
                 if 'Release' in annotations[i + 1][1] or 'End' in annotations[i + 1][1]:
-                    end_description = annotations[i + 1][1].replace('Release', '').replace('End', '').strip('_ ')
+                    end_description = annotations[i + 1][1].replace('Release', '').replace('End', '').strip('_ ').\
+                        replace('_', ' ')
                     max_gesture_duration = self.pipeline.max_gesture_duration
                     if start_description != end_description:
                         print(f'Warning: annotation mismatch of {start_description} in time: {annotation[0]}'
@@ -319,8 +339,9 @@ class Recording_Emg:
                               f'{self.experiment} is longer than {max_gesture_duration} seconds, removing it from the '
                               f'annotations. pls check the annotations in the raw file for further details.')
                     else:
-                        # add the gesture number if it doesnt exist in the label, its either
-                        # todo: this is only temporary until we figure out how to handle the gesture number in the raw files
+                        # add the gesture number if it doesn't exist in the label, it is either the last word or the
+                        # last
+                        # word after '_' (offline and online formats)
                         if start_description.split(' ')[-1].isdigit():
                             num_gest = int(start_description.split(' ')[-1])
                             counter[start_description] = num_gest if num_gest > counter.get(start_description, 0) else \
@@ -440,7 +461,7 @@ class Recording_Emg:
         segments_emg = []
         labels = []
         step_size = floor(self.pipeline.segment_step_sec * self.pipeline.emg_sample_rate)
-        for emg_data, acc_data, label in self.annotations_data:
+        for emg_data, label in self.annotations_data:
             for i in range(0, emg_data.shape[1] - segment_length_emg, step_size):
                 curr_emg_segment = emg_data[:, i:i + segment_length_emg][np.newaxis, :, :]
                 segments_emg.append(curr_emg_segment)
@@ -499,8 +520,8 @@ class Recording_Emg:
         if self.features.size == 0:  # empty array, no features were extracted
             self.preprocess_data()
 
-        labels = self.labels
-        labels = [f'{self.experiment}_{label}' for label in labels]  # add the experiment name to the labels
+        labels = [f'{self.experiment}_{label}' for label in self.labels]  # add the experiment name to the labels
+        labels = np.array(labels, dtype=str)
 
         return self.features, labels
 
@@ -523,6 +544,7 @@ class Recording_Emg:
 class Recording_Emg_Acc(Recording_Emg):
     acc_chan_order_1 = ['Accelerometer_X', 'Accelerometer_Y', 'Accelerometer_Z']
     acc_chan_order_2 = ['ACC-X', 'ACC-Y', 'ACC-Z']
+    acc_chan_3 = ['Channel 16', 'Channel 17', 'Channel 18']
 
     def __init__(self, files_path: list[Path], pipeline: Data_Pipeline):
         self.files_path: list[Path] = files_path
@@ -547,16 +569,26 @@ class Recording_Emg_Acc(Recording_Emg):
             raw_edf = mne.io.read_raw_edf(file_name, preload=True, stim_channel='auto', verbose=False)
             # get the raw edf channels names
             channels_names = raw_edf.ch_names
+            if 'EMG Ch-1' in channels_names:
+                names = self.emg_chan_order_1
+            elif 'Channel 0' in channels_names:
+                names = self.emg_chan_order_2
+            else:
+                raise ValueError('no matching channels where found, pls check the recording channels names!')
+
+            curr_raw_edf_emg = raw_edf.copy().pick_channels(set(names))
+            curr_raw_edf_emg = curr_raw_edf_emg.reorder_channels(names)
+
             if 'Accelerometer_X' in channels_names:
                 acc_names = self.acc_chan_order_1
             elif 'ACC-X' in channels_names:
                 acc_names = self.acc_chan_order_2
+            elif 'Channel 16' in channels_names:
+                acc_names = self.acc_chan_3
             else:
                 raise NameError(f'Error: could not find accelerometer channels in file: {file_name}.'
                                 f'pls check the file name format.')
 
-            curr_raw_edf_emg = raw_edf.copy().drop_channels(set(acc_names))
-            curr_raw_edf_emg = curr_raw_edf_emg.reorder_channels(self.emg_chan_order)
             curr_raw_edf_acc = raw_edf.copy().pick_channels(set(acc_names))
             curr_raw_edf_acc = curr_raw_edf_acc.reorder_channels(acc_names)
 

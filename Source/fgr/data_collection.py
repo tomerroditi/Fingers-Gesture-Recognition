@@ -30,7 +30,8 @@ class Experiment:
             n_repetitions: int = 10,
             img_secs: float = 5,
             fullscreen: bool = True,
-            screen_num: int = 0) -> Path:
+            screen_num: int = 0,
+            exp_num: int = 0) -> Path:
         """
         Run the experiment.
 
@@ -48,10 +49,11 @@ class Experiment:
             Whether to display the experiment in fullscreen. The default is True.
         screen_num : int, optional
             Screen number to display the experiment on. The default is 0.
+        exp_num: int,optional
         """
 
         """ HARD-CODED EXPERIMENT PARAMETERS """
-        img_dir = r'.../images'
+        img_dir = r'C:\Users\Hanein 006\Desktop\Fingers-Gesture-Recognition-main\images'
         instruction_secs = 4
         relax_secs = 3
         """ END PARAMETERS """
@@ -74,7 +76,7 @@ class Experiment:
 
         # make sure the save dir exists and guve the future file a unique name according to the experiment info
         os.makedirs(data_dir, exist_ok=True)
-        self.data.save_as = str(Path(data_dir, f"GR_pos{exp_info['position']}_{exp_info['participant'].rjust(3, '0')}_S{exp_info['session']}_BT.edf"))
+        self.data.save_as = str(Path(data_dir, f"GR_pos{exp_info['position']}_{exp_info['participant'].rjust(3, '0')}_S{exp_info['session']}_rep{exp_num}_BT.edf"))
 
         # start recording data
         self.data.start()

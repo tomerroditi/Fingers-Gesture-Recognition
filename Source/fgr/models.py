@@ -184,7 +184,8 @@ class simple_CNN(nn.Module):
         self.val_labels = np.empty(0)
 
     def cv_fit_model(self, data: np.array, labels: np.array, num_folds: int = 5, batch_size: int = 64,
-                     lr: float = 0.001, l2_weight: float = 0.0001, num_epochs: int = 200) -> list[nn.Module]:
+                     lr: float = 0.001, l2_weight: float = 0.0001, num_epochs: int = 200) ->\
+            (list[nn.Module], list[float]):
         """
         This function performs cross validation training on the model
         inputs:
@@ -197,12 +198,14 @@ class simple_CNN(nn.Module):
             num_epochs: int, the number of epochs to train the model
         outputs:
             models: list of models, each model is a copy of the original model fitted on a different fold
+            accu_vals: list of floats, the accuracy of each model on its validation fold
         """
         fold_idx = pre_training_utils.folds_split_by_gesture(labels, num_folds)
         # fit the label encoder
         self.label_encoder.fit(np.char.strip(labels, '_0123456789'))
         # cv training loop
         models = []
+        accu_vals = []
         for fold in np.unique(fold_idx):
             curr_model = copy.deepcopy(self)  # create a copy of the model for each fold
             # split the data to train and test of the current fold
@@ -211,8 +214,9 @@ class simple_CNN(nn.Module):
             curr_model.fit_model(data[train_idx], labels[train_idx], data[val_idx], labels[val_idx], batch_size, lr,
                                  l2_weight, num_epochs)
             models.append(curr_model)
+            accu_vals.append(curr_model.evaluate_model(data[val_idx], labels[val_idx], plot_cm=False))
 
-        return models
+        return models, accu_vals
 
     def fit_model(self, train_data: np.array, train_labels: np.array, val_data: np.array = None,
                   val_labels: np.array = None, batch_size: int = 64, lr=0.001,
@@ -312,7 +316,8 @@ class simple_CNN(nn.Module):
         loss = loss / len(dataloader)
         return loss, accu
 
-    def evaluate_model(self, data: np.array, labels: np.array, cm_title: str = 'untitled') -> float:
+    def evaluate_model(self, data: np.array, labels: np.array, plot_cm: bool = True, cm_title: str = 'untitled') -> \
+            float:
         predictions = self.classify(data)  # get the gesture of each sample
         unique_labels = np.unique(labels)
         unique_labels_pred = []
@@ -330,13 +335,16 @@ class simple_CNN(nn.Module):
         # calculate the accuracy
         accuracy = np.sum(unique_labels_pred == unique_labels_striped) / len(unique_labels_striped)
 
-        # create and display a confusion matrix
-        tick_labels = np.sort(np.unique(unique_labels_striped))  # use it to make sure that the display is aligned
-        # with cm order
-        cm = sklearn.metrics.confusion_matrix(unique_labels_striped, unique_labels_pred, labels=tick_labels)
-        cm_disp = sklearn.metrics.ConfusionMatrixDisplay(cm, display_labels=tick_labels)
-        cm_disp.plot(cmap='Blues', xticks_rotation='vertical')
-        cm_disp.ax_.set_title(f'{cm_title} - Accuracy: {accuracy:.3f}')
+        if plot_cm:
+            plt.figure()
+            # create and display a confusion matrix
+            tick_labels = np.sort(np.unique(unique_labels_striped))  # use it to make sure that the display is aligned
+            # with cm order
+            cm = sklearn.metrics.confusion_matrix(unique_labels_striped, unique_labels_pred, labels=tick_labels)
+            cm_disp = sklearn.metrics.ConfusionMatrixDisplay(cm, display_labels=tick_labels)
+            cm_disp.plot(cmap='Blues', xticks_rotation=45)
+            cm_disp.ax_.set_title(f'{cm_title} - Accuracy: {accuracy:.3f}')
+            plt.show()
         return accuracy
 
     def classify(self, data: np.array) -> np.array:
