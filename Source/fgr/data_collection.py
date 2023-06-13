@@ -53,9 +53,18 @@ class Experiment:
         """
 
         """ HARD-CODED EXPERIMENT PARAMETERS """
-        img_dir = r'C:\Users\Hanein 006\Desktop\Fingers-Gesture-Recognition-main\images'
+        # Dvir's try #
+        # Get the current directory of the script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        # Traverse up the directory structure twice to reach 'FGR' directory
+        project_dir = os.path.dirname(os.path.dirname(script_dir))
+        # Construct the absolute path to the image file
+        img_dir = os.path.join(project_dir, 'images')
+        # it worked!
+
+        # img_dir = r'C:\Users\YH006_new\Desktop\Fingers-Gesture-Recognition\images'
         instruction_secs = 4
-        relax_secs = 3
+        relax_secs = 0.5
         """ END PARAMETERS """
 
         self.data = data_obj
@@ -100,8 +109,8 @@ class Experiment:
         # store frame rate of monitor if we can measure it
         exp_info['frameRate'] = win.getActualFrameRate()
 
-        # create a default keyboard (e.g. to check for escape)
-        default_keyboard = keyboard.Keyboard(backend='iohub')
+        # # create a default keyboard (e.g. to check for escape)
+        # default_keyboard = keyboard.Keyboard(backend='iohub')
 
         # Initialize components for Routine "Welcome"
         welcome_clock = core.Clock()
@@ -210,9 +219,9 @@ class Experiment:
                     # a response ends the routine
                     continue_routine = False
 
-            # check for quit (typically the Esc key)
-            if default_keyboard.getKeys(keyList=["escape"]):
-                core.quit()
+            # # check for quit (typically the Esc key)
+            # if default_keyboard.getKeys(keyList=["escape"]):
+            #     core.quit()
 
             # check if all components have finished
             if not continue_routine:  # a component has requested a forced-end of Routine
@@ -293,9 +302,9 @@ class Experiment:
                             # win.timeOnFlip(imgs[img_name], 'tStopRefresh')  # time at next scr refresh
                             imgs[img_name].setAutoDraw(False)
 
-                    # check for quit (typically the Esc key)
-                    if default_keyboard.getKeys(keyList=["escape"]):
-                        core.quit()
+                    # # check for quit (typically the Esc key)
+                    # if default_keyboard.getKeys(keyList=["escape"]):
+                    #     core.quit()
 
                     # text updates must come AFTER image updates in order to be placed on top
                     if img_text.status == NOT_STARTED and t_flip >= -frame_tolerance:

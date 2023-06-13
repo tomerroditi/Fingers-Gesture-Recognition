@@ -9,7 +9,7 @@ class Test_Recording:
     @pytest.mark.slow
     def test_load_file(self, real_file_path):
         rec = Recording_Emg_Acc(real_file_path, Data_Pipeline())
-        rec.load_file()
+        rec._load_raw_data_and_annotations()
         assert np.shape(rec.signal)[1] == np.shape(rec.time)[0]
         assert np.shape(rec.signal)[0] == 19, "len of np.array is the size of dim 0 (16 EMG channels + 3 accelerometer channels)"
         assert len(rec.annotations) == 200, "10 trials for each label (10 labels) = 100 trials * 2 (start and end of trial) = 200"

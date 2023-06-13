@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import mne
 
 from hmmlearn import hmm
+from scipy.signal import butter, filtfilt, iirnotch, sosfiltfilt
 from tqdm.auto import tqdm
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -27,7 +28,7 @@ mne.set_log_level('WARNING')  # disable mne function's printing except warnings
 # saving the segments and features in files:
 #   pros:
 #       1. we can work with the whole database without memory issues.
-#       2. we process the data once, and then we can use it as many times as we want.
+#       2. we process the data once, and then we can use it as many emg_times as we want.
 #   cons:
 #       1. we need to implement a mechanism to save and fetch the data from the files.
 # generate data on the fly:
@@ -153,7 +154,7 @@ class Subject:
             raise NotImplementedError
 
         if load_data:
-            [rec.load_file() for rec in
+            [rec._load_raw_data_and_annotations() for rec in  # noqa
              tqdm(recordings, desc='Loading recordings files', leave=False, unit='rec')]  # noqa
         return recordings
 
@@ -219,7 +220,96 @@ class Subject:
         return data, labels
 
 
-class Recording_Emg:
+class Base_Recording:
+
+    def __init__(self, pipeline: Data_Pipeline):
+        self.pipeline = pipeline
+
+    @staticmethod
+    def _filter_data(data: np.ndarray, fs: float, notch: float, low_freq: float, high_freq: float,
+                     buff_len: int = 0) -> np.ndarray:
+        """filter the data according to the pipeline
+
+        Parameters
+        ----------
+        data : np.ndarray
+            the data to filter, shape: (n_segments, n_channels, n_samples)
+
+        Returns
+        -------
+        np.ndarray
+            the filtered data, shape: (n_gestures, n_channels, n_samples - filter_buffer * sample_rate)
+        """
+        # notch filter design
+        Q = 30  # Quality factor
+        w0 = notch / (fs / 2)  # Normalized frequency
+        b_notch, a_notch = iirnotch(w0, Q)
+
+        # band pass filter design
+        low_band = low_freq / (fs / 2)
+        high_band = high_freq / (fs / 2)
+        # create bandpass filter for EMG
+        sos = butter(4, [low_band, high_band], btype='bandpass', output='sos')
+
+        # apply filters using 'filtfilt' to avoid phase shift
+        data = sosfiltfilt(sos, data, axis=2, padtype='even')
+        data = filtfilt(b_notch, a_notch, data, axis=2, padtype='even')
+
+        if buff_len > 0:
+            data = data[:, :, buff_len:]
+        return data
+
+    @staticmethod
+    def normalize_data(data: np.array, norm_type: str) -> np.array:
+        """
+        normalize the data according to the pipeline
+
+        Parameters
+        ----------
+        data : np.ndarray
+            the data to normalize, shape: (n_segments, n_channels, n_samples)
+        norm_type : str
+            the type of normalization to apply, one of: 'max', 'zscore', '01', '-11', 'quantileX' where X is the
+            quantile to use for normalization
+        """
+        if norm_type == 'none':  # no normalization, fast return for online performance
+            return data
+
+        axis = (1, 2)  # normalize over the channels and samples
+
+        if norm_type == 'zscore':
+            mean = np.mean(data, axis=axis, keepdims=True)
+            std = np.std(data, axis=axis, keepdims=True)
+            data = (data - mean) / std
+        elif norm_type == '01':
+            min_ = np.min(data, axis=axis, keepdims=True)
+            max_ = np.max(data, axis=axis, keepdims=True)
+            data = (data - min_) / (max_ - min_)
+        elif norm_type == '-11':
+            min_ = np.min(data, axis=axis, keepdims=True)
+            max_ = np.max(data, axis=axis, keepdims=True)
+            data = 2 * (data - min_) / (max_ - min_) - 1
+        elif 'quantile' in norm_type:
+            quantiles = norm_type.split('_')[1].split('-')
+            quantiles = [float(q) for q in quantiles]
+            low_quantile = np.quantile(data, quantiles[0], axis=axis, keepdims=True)
+            high_quantile = np.quantile(data, quantiles[1], axis=axis, keepdims=True)
+            data = (data - low_quantile) / (high_quantile - low_quantile)
+        elif norm_type == 'max':
+            max_ = np.max(data, axis=axis, keepdims=True)
+            data = data / max_
+        else:
+            raise ValueError('Invalid normalization method for EMG data')
+        return data
+
+    def extract_features(self, emg: np.ndarray, acc: np.ndarray = None, gyro: np.ndarray = None) -> np.ndarray:
+        feature_extractor = build_feature_extractor(self.pipeline.features_extraction_method)
+        segments = (emg, acc, gyro)  # (emg, acc, gyro)
+        features = feature_extractor.extract_features(segments, **self.pipeline.features_extraction_params)
+        return features
+
+
+class Recording_Emg(Base_Recording):
     emg_chan_order_1 = ['EMG Ch-1', 'EMG Ch-2', 'EMG Ch-3', 'EMG Ch-4', 'EMG Ch-5', 'EMG Ch-6', 'EMG Ch-7', 'EMG Ch-8',
                         'EMG Ch-9', 'EMG Ch-10', 'EMG Ch-11', 'EMG Ch-12', 'EMG Ch-13', 'EMG Ch-14', 'EMG Ch-15',
                         'EMG Ch-16']
@@ -231,13 +321,12 @@ class Recording_Emg:
         self.files_path: list[Path] = files_path
         self.experiment: str = self.file_path_to_experiment(files_path[0])  # str, "subject_session_position" template
         self.pipeline: Data_Pipeline = pipeline  # stores all preprocessing parameters
-        self.raw_edf_emg: mne.io.edf.edf.RawEDF or None = None  # emg channels only
-        self.annotations: list[(float, str)] = []  # (time onset (seconds), description) pairs
-        self.annotations_data: list[(np.array, str)] = []  # (EMG, acc, label) triplets
-        self.segments: np.array = None  # EMG segments data stacked on dim 0
-        self.labels: np.array = np.empty(0)  # labels of the segments
-        self.features: np.array = np.empty(0)  # np.array, stacked on dim 0
-        self.gesture_counter: dict = {}  # dict of the number of repetitions of each gesture, currently not used
+        self.emg_data: np.ndarray or None = None  # emg data, shape: (n_channels, n_samples)
+        self.emg_times: np.ndarray or None = None  # time stamps of the emg data, shape: (n_samples,)
+        self.annotations: list[(float, str)] or None = None  # (time onset (seconds), description) pairs
+        self.segments: np.ndarray or None = None  # EMG segments, shape: (n_segments, n_channels, n_samples)
+        self.labels: np.ndarray or None = None  # labels of the segments, shape: (n_segments,)
+        self.features: np.ndarray or None = None  # features of the segments, shape: (n_segments, *features_dims)
 
     @staticmethod
     def file_path_to_experiment(file_path: Path) -> str:
@@ -271,44 +360,49 @@ class Recording_Emg:
                             f'pls check the file name format.')
         return experiment
 
-    def load_file(self):
+    def _load_raw_data_and_annotations(self, return_raw_edf: bool = False) -> \
+            (np.ndarray, np.ndarray, list[(float, str)]) or (np.ndarray, np.ndarray, list[(float, str)], mne.io.Raw):
         """this function loads the files data and sets the raw_edf and annotations field.
         in the future we might insert here the handling of merging files of part1, part2, etc. to one file"""
-
+        raw_edf = None
         files_names = [str(path) for path in self.files_path]
         files_names.sort()  # part1, part2, etc. should be in order
         for file_name in files_names:
-            raw_edf = mne.io.read_raw_edf(file_name, preload=True, stim_channel='auto', verbose=False)
-            channels_names = raw_edf.ch_names
-            if 'EMG Ch-1' in channels_names:
-                names = self.emg_chan_order_1
-            elif 'Channel 0' in channels_names:
-                names = self.emg_chan_order_2
+            curr_raw_edf = mne.io.read_raw_edf(file_name, preload=True, stim_channel='auto', verbose=False)
+            if raw_edf is None:
+                raw_edf = curr_raw_edf
             else:
-                raise ValueError('no matching channels where found, pls check the recording channels names!')
+                raw_edf.append(curr_raw_edf)
 
-            curr_raw_edf_emg = raw_edf.copy().pick_channels(set(names))
-            curr_raw_edf_emg = curr_raw_edf_emg.reorder_channels(names)
-            # concat files of the same experiment
-            if self.raw_edf_emg is None:
-                self.raw_edf_emg = curr_raw_edf_emg
-            else:
-                self.raw_edf_emg.append(curr_raw_edf_emg)
-        # extract the annotations from the raw_edf, leave only relevant (and good) ones. description format:
-        # '<Start\Release>_<gesture name>_<repetition number>'
-        annotations = self.raw_edf_emg.annotations  # use the concatenated raw_edf_emg object to get the annotations
-        annotations = [(onset, description) for onset, description in
-                       zip(annotations.onset, annotations.description)
-                       if 'Start' in description or 'Release' in description or 'End' in description]
-        annotations = self.verify_annotations(annotations)
-        self.annotations = annotations
+        channels_names = raw_edf.ch_names
+        if 'EMG Ch-1' in channels_names:
+            names = self.emg_chan_order_1
+        elif 'Channel 0' in channels_names:
+            names = self.emg_chan_order_2
+        else:
+            raise ValueError('no matching channels where found, pls check the recording channels names!')
 
-    def verify_annotations(self, annotations: list[(float, str)]) -> list[(float, str)]:
+        raw_edf_emg = raw_edf.copy().pick_channels(set(names))
+        raw_edf_emg = raw_edf_emg.reorder_channels(names)
+
+        # extract raw data
+        emg_data, times = raw_edf_emg.get_data(units='uV', return_times=True)  # emg data - no scaling!!!
+        # extract annotations
+        annotations = self._get_verified_annotations(raw_edf_emg.annotations)
+
+        if return_raw_edf:
+            return emg_data, times, annotations, raw_edf
+        else:
+            return emg_data, times, annotations
+
+    def _get_verified_annotations(self, annotations: mne.Annotations) -> list[(float, str)]:
         """
         This function verifies that the annotations are in the right order - start, stop, start, stop, etc.,
         and that each consecutive start, stop annotations are of the same gesture, where targets are in the format of:
         Start_<gesture_name>_<number> and Release_<gesture_name>_<number>
         """
+        annotations = [(onset, description) for onset, description in zip(annotations.onset, annotations.description)
+                       if 'Start' in description or 'Release' in description or 'End' in description]
         # reject unwanted annotations - keep only gesture related ones
         gesture_annotations = []
         for onset, description in annotations:
@@ -377,152 +471,82 @@ class Recording_Emg:
         return good_annotations
 
     def preprocess_data(self) -> None:
-        """
-        preprocess the segments according to the data pipeline
-        - load data if not loaded
-        - filter the data
-        - extract the annotated data and its annotation
-        - segment the data (discrete or continuous)
-        - normalize the data
-        - extract features
-        - normalize the features
-        all the preprocessing steps are done in place, meaning that the data is changed in the object.
-        """
-        if self.raw_edf_emg is None:
-            self.load_file()  # sets the raw objects and the annotations properties
+        if self.emg_data is None:
+            self.emg_data, self.emg_times, self.annotations = self._load_raw_data_and_annotations()
 
-        self.filter_signal()
-        self.extract_annotated_data()  # list[(np.array, np.array, str)]
-
+        fs = self.pipeline.emg_sample_rate
+        buff_len = fs * self.pipeline.emg_buff_dur
         if self.pipeline.segmentation_type == "discrete":
-            self.segment_data_discrete()
+            self.segments, self.labels = self.segment_data_discrete(self.emg_data, self.emg_times, fs,
+                                                                    buff_len=buff_len)
         elif self.pipeline.segmentation_type == "continuous":
-            self.segment_data_continuous()
+            raise NotImplementedError("continuous segmentation is not implemented yet")
+        else:
+            raise ValueError("invalid segmentation type")
 
-        self.normalize_segments()
-        self.extract_features()
-        self.normalize_features()
+        self.segments = self._filter_data(self.segments, self.pipeline.emg_sample_rate, self.pipeline.emg_notch_freq,
+                                          self.pipeline.emg_low_freq, self.pipeline.emg_high_freq, buff_len)
 
-    def filter_signal(self) -> None:
-        # todo: check the order of the filters, decide what order to use.
-        # todo: figure out if filtering the accelerometer data is necessary
-        """filter the signal according to the data pipeline (currently only the EMG, acc will be added later here)"""
-        raw_edf_emg = self.raw_edf_emg.notch_filter(freqs=self.pipeline.emg_notch_freq)
-        raw_edf_emg = raw_edf_emg.filter(l_freq=self.pipeline.emg_low_freq, h_freq=self.pipeline.emg_high_freq,
-                                         method='iir')
-        self.raw_edf_emg: type(mne.io.edf.edf.RawEDF) = raw_edf_emg
+        self.segments = self.normalize_data(self.segments, self.pipeline.emg_norm)
+        self.features = self.extract_features(self.segments)
+        self.features = self.normalize_data(self.features, self.pipeline.features_norm)
 
-    def extract_annotated_data(self) -> None:
-        """extract the data of the gestures. It might be used for exploring the data, or for discrete segmentation"""
-        annotations_data = []
-        start_buffer = self.pipeline.annotation_delay_start  # seconds
-        end_buffer = self.pipeline.annotation_delay_end  # seconds
-        for i, annotation in enumerate(self.annotations):
-            time, description = annotation
-            if 'Release_' in description:
-                continue
-            elif 'Start_' in description:
-                start_time = time + start_buffer
-                end_time = self.annotations[i + 1][0] - end_buffer  # the next annotation is the end of the gesture
-                label = description.replace('Start_', '')  # remove the 'Start_' from the label
-                label_for_counter = label.strip('_0123456789')  # remove the number from the label
-                self.gesture_counter[label_for_counter] = self.gesture_counter.get(label_for_counter, 0) + 1
-                emg_data: type(np.arrray) = self.raw_edf_emg.get_data(tmin=start_time, tmax=end_time)
-                annotations_data.append((emg_data, label))
-        self.annotations_data = annotations_data
-
-    def heatmap_visualization(self, data: np.array, num_gestures: int, num_repetitions_per_gesture: dict):
-        # If the channels are not arranged in chronological order,
-        # should get the location and rearrange them here.
-
-        heatmaps = [np.reshape(segment, (4, 4)) for segment in data]  # np iterates over dim 0
-        fig, axes = plt.subplots(num_gestures, max(num_repetitions_per_gesture.values()))
-        idx = 0
-        unique_labels = np.unique(self.labels)
-        for i in range(num_gestures):
-            for j in range(num_repetitions_per_gesture[unique_labels[i]]):
-                axes[i, j].set_xticks([])
-                axes[i, j].set_yticks([])
-                im = axes[i, j].imshow(heatmaps[idx], cmap='hot')
-                idx += 1
-            fig.axes[i * max(num_repetitions_per_gesture.values())].set_ylabel('h', rotation=0, fontsize=18)
-        plt.setp(plt.gcf().get_axes(), xticks=[], yticks=[])
-        # noinspection PyUnboundLocalVariable
-        cbar = fig.colorbar(im, ax=axes.ravel().tolist())
-        cbar.ax.tick_params(labelsize=18)
-        plt.show()
-
-    def segment_data_discrete(self) -> None:
+    def segment_data_discrete(self, data: np.ndarray, times: np.ndarray, fs: float, buff_len: int = 0) ->\
+            (np.ndarray, np.ndarray):
         """
-        discrete segmentation of the data according to the annotations. this is to repeat last year results.
-        use float16 type to save memory
+        discrete segmentation of the data according to the annotations.
+
+        Parameters
+        ----------
+        data: np.ndarray
+            the data to segment, should be of shape (n_channels, n_samples)
+        fs: float
+            the sampling frequency of the data
+        buff_len: int
+            the length of the buffer to add to the segments, in samples
         """
-        segment_length_emg = floor(self.pipeline.segment_length_sec * self.pipeline.emg_sample_rate)
-        segments_emg = []
+        seg_dur = self.pipeline.segment_length_sec
+        step_dur = self.pipeline.segment_step_sec
+        seg_len = floor(seg_dur * fs)
+        step_size = floor(step_dur * fs)
+        start_delay_len = floor(self.pipeline.annotation_delay_start * fs)
+        end_delay_len = floor(self.pipeline.annotation_delay_end * fs)
+
+        segments = []
         labels = []
-        step_size = floor(self.pipeline.segment_step_sec * self.pipeline.emg_sample_rate)
-        for emg_data, label in self.annotations_data:
-            for i in range(0, emg_data.shape[1] - segment_length_emg, step_size):
-                curr_emg_segment = emg_data[:, i:i + segment_length_emg][np.newaxis, :, :]
-                segments_emg.append(curr_emg_segment)
-                labels.append(label)
+        labels_vector = self._get_time_labels_vector(times)
+        for i in range(max(buff_len, start_delay_len), data.shape[1] - seg_len - end_delay_len, step_size):
+            if not np.all(labels_vector[i:i + seg_len] != 'Idle') or \
+               not np.all(labels_vector[i - start_delay_len: i] != 'Idle') or \
+               not np.all(labels_vector[i + seg_len: i + seg_len + end_delay_len] != 'Idle'):
+                continue
+            segments.append(data[:, i - buff_len: i + seg_len])
+            labels.append(labels_vector[i])  # notice that the number of the gesture is included in the labels!
 
-        self.segments = np.concatenate(segments_emg, axis=0, dtype=np.float32)
-        self.labels = np.array(labels, dtype=str)  # notice that the number of the gesture is included in the labels!
+        return np.stack(segments, axis=0), np.array(labels, dtype=str)
 
     def segment_data_continuous(self) -> None:
         raise NotImplementedError
 
-    def normalize_segments(self) -> None:
-        self.segments = self.norm_me(self.segments, self.pipeline.emg_norm)
-
-    def normalize_features(self) -> np.array:
-        self.features = self.norm_me(self.features, self.pipeline.features_norm)
-
-    @staticmethod
-    def norm_me(data: np.array, norm_type: str) -> np.array:
-        axis = tuple(range(1, data.ndim))
-        if norm_type == 'zscore':
-            mean = np.mean(data, axis=axis, keepdims=True)
-            std = np.std(data, axis=axis, keepdims=True)
-            data = (data - mean) / std
-        elif norm_type == '01':
-            min_ = np.min(data, axis=axis, keepdims=True)
-            max_ = np.max(data, axis=axis, keepdims=True)
-            data = (data - min_) / (max_ - min_)
-        elif norm_type == '-11':
-            min_ = np.min(data, axis=axis, keepdims=True)
-            max_ = np.max(data, axis=axis, keepdims=True)
-            data = 2 * (data - min_) / (max_ - min_) - 1
-        elif 'quantile' in norm_type:
-            quantiles = norm_type.split('_')[1].split('-')
-            quantiles = [float(q) for q in quantiles]
-            low_quantile = np.quantile(data, quantiles[0], axis=axis, keepdims=True)
-            high_quantile = np.quantile(data, quantiles[1], axis=axis, keepdims=True)
-            data = (data - low_quantile) / (high_quantile - low_quantile)
-        elif norm_type == 'max':
-            max_ = np.max(data, axis=axis, keepdims=True)
-            data = data / max_
-        elif norm_type == 'none':
-            pass
-        else:
-            raise ValueError('Invalid normalization method for EMG data')
-        return data
-
-    def extract_features(self) -> None:
-        feature_extractor = build_feature_extractor(self.pipeline.features_extraction_method)
-        segments = (self.segments, None, None)  # (emg, acc, gyro)
-        features = feature_extractor.extract_features(segments, **self.pipeline.features_extraction_params)
-        self.features = features
+    def _get_time_labels_vector(self, times: np.array) -> np.ndarray:
+        """This function creates a vector of labels for each time stamp to be used in the segmentation process."""
+        if self.annotations is None:
+            raise ValueError('annotations are not loaded, please load the annotations first with the '
+                             '"_load_raw_data_and_annotations" function.')
+        # create a vector of labels for each time stamp with 'idle' as the default label
+        time_labels = np.full(times.shape, fill_value='Idle', dtype='<U30')
+        for i in range(0, len(self.annotations), 2):
+            desc = self.annotations[i][1].replace('Start_', '')
+            start_time = self.annotations[i][0]
+            end_time = self.annotations[i + 1][0]
+            time_labels[np.logical_and(times >= start_time, times <= end_time)] = desc
+        return time_labels
 
     def get_dataset(self) -> (np.array, np.array):
         """extract a dataset of the given recording file"""
-        if self.features.size == 0:  # empty array, no features were extracted
+        if self.features is None:
             self.preprocess_data()
-
-        labels = [f'{self.experiment}_{label}' for label in self.labels]  # add the experiment name to the labels
-        labels = np.array(labels, dtype=str)
-
+        labels = np.char.add(f'{self.experiment}_', self.labels)  # add the experiment name to the labels
         return self.features, labels
 
     def match_experiment(self, experiment: str) -> bool:
@@ -540,84 +564,17 @@ class Recording_Emg:
                     return True
         return False
 
+    def heatmap_visualization(self, data: np.array, num_gestures: int, num_repetitions_per_gesture: dict):
+        raise NotImplementedError
 
-class Recording_Emg_Acc(Recording_Emg):
-    acc_chan_order_1 = ['Accelerometer_X', 'Accelerometer_Y', 'Accelerometer_Z']
-    acc_chan_order_2 = ['ACC-X', 'ACC-Y', 'ACC-Z']
-    acc_chan_3 = ['Channel 16', 'Channel 17', 'Channel 18']
-
-    def __init__(self, files_path: list[Path], pipeline: Data_Pipeline):
-        self.files_path: list[Path] = files_path
-        self.experiment: str = self.file_path_to_experiment(files_path[0])  # str, "subject_session_position" template
-        self.pipeline: Data_Pipeline = pipeline  # stores all preprocessing parameters
-        self.raw_edf_emg: mne.io.edf.edf.RawEDF or None = None  # emg channels only
-        self.raw_edf_acc: mne.io.edf.edf.RawEDF or None = None  # accelerometer channels only
-        self.annotations: list[(float, str)] = []  # (time onset (seconds), description) pairs
-        self.annotations_data: list[(np.array, np.array, str)] = []  # (EMG, acc, label) triplets
-        self.segments: (np.array, np.array) = ()  # (EMG, acc) segments data stacked on dim 0
-        self.labels: np.array = np.empty(0)  # labels of the segments
-        self.features: np.array = np.empty(0)  # np.array, stacked on dim 0
-        self.gesture_counter: dict = {}  # dict of the number of repetitions of each gesture, currently not used
-
-    def load_file(self):
-        """this function loads the files data and sets the raw_edf and annotations field.
-        in the future we might insert here the handling of merging files of part1, part2, etc. to one file"""
-
-        files_names = [str(path) for path in self.files_path]
-        files_names.sort()  # part1, part2, etc. should be in order
-        for file_name in files_names:
-            raw_edf = mne.io.read_raw_edf(file_name, preload=True, stim_channel='auto', verbose=False)
-            # get the raw edf channels names
-            channels_names = raw_edf.ch_names
-            if 'EMG Ch-1' in channels_names:
-                names = self.emg_chan_order_1
-            elif 'Channel 0' in channels_names:
-                names = self.emg_chan_order_2
-            else:
-                raise ValueError('no matching channels where found, pls check the recording channels names!')
-
-            curr_raw_edf_emg = raw_edf.copy().pick_channels(set(names))
-            curr_raw_edf_emg = curr_raw_edf_emg.reorder_channels(names)
-
-            if 'Accelerometer_X' in channels_names:
-                acc_names = self.acc_chan_order_1
-            elif 'ACC-X' in channels_names:
-                acc_names = self.acc_chan_order_2
-            elif 'Channel 16' in channels_names:
-                acc_names = self.acc_chan_3
-            else:
-                raise NameError(f'Error: could not find accelerometer channels in file: {file_name}.'
-                                f'pls check the file name format.')
-
-            curr_raw_edf_acc = raw_edf.copy().pick_channels(set(acc_names))
-            curr_raw_edf_acc = curr_raw_edf_acc.reorder_channels(acc_names)
-
-            # concat files of the same experiment
-            if self.raw_edf_acc is None:
-                self.raw_edf_acc = curr_raw_edf_acc
-                self.raw_edf_emg = curr_raw_edf_emg
-            else:
-                self.raw_edf_acc.append(curr_raw_edf_acc)
-                self.raw_edf_emg.append(curr_raw_edf_emg)
-        # extract the annotations from the raw_edf, leave only relevant (and good) ones. description format:
-        # '<Start\Release>_<gesture name>_<repetition number>'
-        annotations = self.raw_edf_emg.annotations  # use the concatenated raw_edf_emg object to get the annotations
-        annotations = [(onset, description) for onset, description in
-                       zip(annotations.onset, annotations.description)
-                       if 'Start' in description or 'Release' in description or 'End' in description]
-        annotations = self.verify_annotations(annotations)
-        self.annotations = annotations
-
-    def filter_signal(self) -> None:
-        # todo: check the order of the filters, decide what order to use.
-        # todo: figure out if filtering the accelerometer data is necessary
-        """filter the signal according to the data pipeline (currently only the EMG, acc will be added later here)"""
-        super().filter_signal()
-        self.raw_edf_acc: type(mne.io.edf.edf.RawEDF) = self.raw_edf_acc
-
-    def extract_annotated_data(self) -> None:
-        """extract the data of the gestures. It might be used for exploring the data, or for discrete segmentation"""
-        annotations_data = []
+    def get_annotated_data(self, data: np.ndarray) -> list[(np.ndarray, str)]:
+        """
+        extract the data that is annotated and its annotation from the raw data. the annotations are not guaranteed to
+        be all the same length so we cant store the data in a single matrix. instead we store it in a list of tuples
+        where each tuple is a segment of the data and its annotation.
+        """
+        data_segments = []
+        labels_array = []
         start_buffer = self.pipeline.annotation_delay_start  # seconds
         end_buffer = self.pipeline.annotation_delay_end  # seconds
         for i, annotation in enumerate(self.annotations):
@@ -627,154 +584,162 @@ class Recording_Emg_Acc(Recording_Emg):
             elif 'Start_' in description:
                 start_time = time + start_buffer
                 end_time = self.annotations[i + 1][0] - end_buffer  # the next annotation is the end of the gesture
-                label = description.replace('Start_', '')  # remove the 'Start_' from the label
-                label_for_counter = label.strip('_0123456789')  # remove the number from the label
-                self.gesture_counter[label_for_counter] = self.gesture_counter.get(label_for_counter, 0) + 1
-                emg_data: type(np.arrray) = self.raw_edf_emg.get_data(tmin=start_time, tmax=end_time)
-                acc_data: type(np.array) = self.raw_edf_acc.get_data(tmin=start_time, tmax=end_time)
-                annotations_data.append((emg_data, acc_data, label))
-        self.annotations_data = annotations_data
+                labels_array.append(description.replace('Start_', ''))
+                data_segments.append(data[:, np.logical_and(self.emg_times >= start_time, self.emg_times <= end_time)])
+            else:
+                raise ValueError(f'annotation {description} is not valid, it should contain either Start or Release')
+        return zip(data_segments, labels_array)
 
-    def segment_data_discrete(self) -> None:
-        """
-        discrete segmentation of the data according to the annotations. this is to repeat last year results.
-        use float16 type to save memory
-        """
-        segment_length_emg = floor(self.pipeline.segment_length_sec * self.pipeline.emg_sample_rate)
-        segment_length_acc = floor(self.pipeline.segment_length_sec * self.pipeline.acc_sample_rate)
 
-        segments_emg = []
-        segments_acc = []
-        labels = []
-        step_size = floor(self.pipeline.segment_step_sec * self.pipeline.emg_sample_rate)
-        for emg_data, acc_data, label in self.annotations_data:
-            # emg segmentation and labels creation
-            for i in range(0, emg_data.shape[1] - segment_length_emg, step_size):
-                curr_emg_segment = emg_data[:, i:i + segment_length_emg][np.newaxis, :, :]
-                segments_emg.append(curr_emg_segment)
-                labels.append(label)
-            # acc segmentation
-            for i in range(0, acc_data.shape[1] - segment_length_acc, step_size):
-                curr_acc_segment = acc_data[:, i:i + segment_length_acc][np.newaxis, :, :]
-                segments_acc.append(curr_acc_segment)
+class Recording_Emg_Acc(Recording_Emg):
+    acc_chan_order_1 = ['Accelerometer_X', 'Accelerometer_Y', 'Accelerometer_Z']
+    acc_chan_order_2 = ['ACC-X', 'ACC-Y', 'ACC-Z']
+    acc_chan_3 = ['Channel 16', 'Channel 17', 'Channel 18']
 
-        segments_emg = np.concatenate(segments_emg, axis=0, dtype=np.float32)
-        segments_acc = np.concatenate(segments_acc, axis=0, dtype=np.float32)
-        labels = np.array(labels, dtype=str)
+    def __init__(self, files_path: list[Path], pipeline: Data_Pipeline):
+        super().__init__(files_path, pipeline)
+        self.acc_data: np.ndarray or None = None  # acc data, shape: (n_channels, n_samples)
+        self.acc_times: np.ndarray or None = None  # acc times, shape: (n_samples,)
+        self.segments: (np.ndarray, np.ndarray) or None = None  # (emg, acc), shapes: (n_segments, n_channels, n_samples)
 
-        self.segments = (segments_emg, segments_acc)
-        self.labels = labels  # notice that the number of the gesture is included in the labels!
+    def preprocess_data(self) -> None:
+        if self.emg_data is None:
+            self.emg_data, self.emg_times, self.acc_data, self.acc_times, self.annotations = \
+                self._load_raw_data_and_annotations()
 
-    def segment_data_continuous(self) -> None:
-        raise NotImplementedError
+        acc_fs = self.pipeline.acc_sample_rate
+        emg_fs = self.pipeline.emg_sample_rate
+        emg_buff_len = emg_fs * self.pipeline.emg_buff_dur
+        if self.pipeline.segmentation_type == "discrete":
+            emg_segments, self.labels = self.segment_data_discrete(self.emg_data, self.emg_times, emg_fs,
+                                                                   buff_len=emg_buff_len)
+            acc_segments, _ = self.segment_data_discrete(self.acc_data, self.acc_times, acc_fs)
+        elif self.pipeline.segmentation_type == "continuous":
+            raise NotImplementedError("continuous segmentation is not implemented yet")
+        else:
+            raise ValueError("invalid segmentation type")
 
-    def normalize_segments(self) -> None:
-        acc_segments = self.segments[1]
-        emg_segments = self.segments[0]
-        acc_segments = self.norm_me(acc_segments, self.pipeline.acc_norm)
-        emg_segments = self.norm_me(emg_segments, self.pipeline.emg_norm)
+        emg_segments = self._filter_data(emg_segments, self.pipeline.emg_sample_rate, self.pipeline.emg_notch_freq,
+                                         self.pipeline.emg_low_freq, self.pipeline.emg_high_freq, emg_buff_len)
+        emg_segments = self.normalize_data(emg_segments, self.pipeline.emg_norm)
+
         self.segments = (emg_segments, acc_segments)
+        self.features = self.extract_features(emg_segments, acc=acc_segments)
+        self.features = self.normalize_data(self.features, self.pipeline.features_norm)
 
-    def extract_features(self) -> None:
-        feature_extractor = build_feature_extractor(self.pipeline.features_extraction_method)
-        segments = (self.segments[0], self.segments[1], None)  # emg, acc, gyro
-        features = feature_extractor.extract_features(segments, **self.pipeline.features_extraction_params)
-        self.features = features
+    def _load_raw_data_and_annotations(self, return_raw_edf: bool = False) -> \
+            (np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[(float, str)]) or \
+            (np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[(float, str)], mne.io.Raw):
+        """
+        load the raw data and annotations from the recording file
+
+        Parameters
+        ----------
+        return_raw_edf: bool
+            whether to return the raw edf object or not
+
+        Returns
+        -------
+        emg_data: np.ndarray
+            emg data, shape: (n_channels, n_samples)
+        emg_time: np.ndarray
+            emg times, shape: (n_samples,)
+        acc_data: np.ndarray
+            acc data, shape: (n_channels, n_samples)
+        acc_time: np.ndarray
+            acc times, shape: (n_samples,)
+        annotations: list[(float, str)]
+            list of tuples where each tuple is an annotation and its time
+        raw_edf: mne.io.Raw
+            raw edf object, only returned if return_raw_edf is True
+        """
+        # get emg data and raw edf
+        emg_data, emg_time, annotations, raw_edf = super()._load_raw_data_and_annotations(return_raw_edf=True)
+
+        # extract acc data
+        channels_names = raw_edf.ch_names
+        if 'Accelerometer_X' in channels_names:
+            acc_names = self.acc_chan_order_1
+        elif 'ACC-X' in channels_names:
+            acc_names = self.acc_chan_order_2
+        elif 'Channel 16' in channels_names:
+            acc_names = self.acc_chan_3
+        else:
+            raise NameError(f'no matching channels where found, pls check the recording channels names!')
+
+        raw_edf_acc = raw_edf.copy().pick_channels(set(acc_names))
+        raw_edf_acc = raw_edf_acc.reorder_channels(acc_names)
+        # todo: check if we need to set a unit here to prevent scaling the data
+        acc_data, acc_time = raw_edf_acc.get_data(return_times=True, units='uV')
+
+        if return_raw_edf:
+            return emg_data, emg_time, acc_data, acc_time, annotations, raw_edf
+        else:
+            return emg_data, emg_time, acc_data, acc_time, annotations
 
 
-class Real_Time_Recording:
+class Real_Time_Recording(Base_Recording):
     def __init__(self, data_streamer: Data, pipeline: Data_Pipeline):
         self.data_streamer = data_streamer
         self.pipeline = pipeline
-        self.latest_segment = None  # currenly includes only the emg data
-        self.latest_features = None
 
-    def get_feats_for_prediction(self) -> np.array:
+        seg_dur = self.pipeline.segment_length_sec
+        fs = self.pipeline.emg_sample_rate
+        buff_dur = self.pipeline.emg_buff_dur
+        self.seg_len = floor(seg_dur * fs)
+        self.buff_len = floor(buff_dur * fs)
+        self.total_len = self.seg_len + self.buff_len
+
+    def get_feats_for_prediction(self) -> np.ndarray:
         """
         The main function of the class, this should be the only function called from outside the class.
         This function is responsible for fetching the latest segment from the data streamer, preprocess it and return
         the features ready for prediction.
 
-        Note: currently this class only takes care of the emg data since the streamer class doesn't support acc and gyro data yet.
-            once the streamer class will support acc and gyro data, this class will be updated to support them as well.
+        Returns
+        -------
+        features: np.ndarray
+            the features ready for prediction, the shape is dependent on the feature extraction function that is set
+            in the pipeline. shape: (1, *features_shape)
+
+        Note: currently this class only takes care of the emg data since the streamer class doesn't support acc and gyro
+              data yet. once the streamer class will support acc and gyro data, this class will be updated to support
+              them as well.
         """
-        self._fetch_latest_segment()
-        self._preprocess_latest_segment()
-        return self.latest_features
+        segment = self._fetch_latest_segment()
+        # self._plot_segment(segment[0])
+        if self.data_streamer.fs_exg != self.pipeline.emg_sample_rate:
+            raise ValueError("the sampling rate of the data streamer and the pipeline must be the same")
 
-    def _fetch_latest_segment(self) -> None:
-        """fetch the latest segment from the data streamer"""
-        self.latest_segment = self.data_streamer.exg_data[
-                              -self.data_streamer.fs_exg * self.pipeline.segment_length_sec:, :]
+        segment = self._filter_data(segment, self.pipeline.emg_sample_rate, self.pipeline.emg_notch_freq,
+                                    self.pipeline.emg_low_freq, self.pipeline.emg_high_freq, self.buff_len)
+        segment = self.normalize_data(segment, self.pipeline.emg_norm)
+        # self._plot_segment(segment[0])
+        features = self.extract_features(segment)
+        features = self.normalize_data(features, self.pipeline.features_norm)
+        return features
 
-    def _preprocess_latest_segment(self) -> None:
+    def _fetch_latest_segment(self) -> np.ndarray:
         """
-        preprocess the segment according to the data pipeline
-        - filter the data
-        - normalize the data
-        - extract features
-        - normalize the features
-        all the preprocessing steps are done in place, meaning that the data is changed in the object.
+        fetch the latest segment from the data streamer.
+
+        Returns
+        -------
+        latest_segment: np.ndarray
+            the latest segment fetched from the data streamer, shape: (1, n_channels, n_samples)
         """
-        self._filter_segment()
-        self._normalize_segment()
-        self._extract_features()
-        self._normalize_features()
-
-    def _filter_segment(self) -> None:
-        # todo: check the order of the filters, decide what order to use.
-        # todo: figure out if filtering the accelerometer data is necessary
-        """filter the signal according to the data pipeline (currently only the EMG, acc will be added later here)"""
-        fs = self.data_streamer.fs_exg
-        l_freq = self.pipeline.emg_low_freq
-        h_freq = self.pipeline.emg_high_freq
-        notch = self.pipeline.emg_notch_freq
-        if l_freq or h_freq:
-            self.latest_segment = mne.filter.filter_data(self.latest_segment, sfreq=fs, l_freq=l_freq, h_freq=h_freq,
-                                                         method='iir', verbose=False)
-        if notch:
-            self.latest_segment = mne.filter.notch_filter(self.latest_segment, Fs=fs, freqs=notch, method='iir',
-                                                          verbose=False)
-
-    def _normalize_segment(self) -> None:
-        self.latest_segment = self._norm_me(self.latest_segment, self.pipeline.emg_norm)
-
-    def _extract_features(self) -> None:
-        feature_extractor = build_feature_extractor(self.pipeline.features_extraction_method)
-        segment = (self.latest_segment, None, None)
-        self.latest_features = feature_extractor.extract_features(segment, **self.pipeline.features_extraction_params)
-
-    def _normalize_features(self) -> None:
-        self.latest_features = self._norm_me(self.latest_features, self.pipeline.features_norm)
+        # transpose to match the shape of the preprocessing functions
+        # add a dimension to the data to match the input shape of the preprocessing functions
+        return self.data_streamer.exg_data[- self.total_len:, :].T[np.newaxis, :, :]
 
     @staticmethod
-    def _norm_me(data: np.array, norm_type: str) -> np.array:
-        if norm_type == 'zscore':
-            mean = np.mean(data, keepdims=True)
-            std = np.std(data, keepdims=True)
-            data = (data - mean) / std
-        elif norm_type == '01':
-            min_ = np.min(data, keepdims=True)
-            max_ = np.max(data, keepdims=True)
-            data = (data - min_) / (max_ - min_)
-        elif norm_type == '-11':
-            min_ = np.min(data, keepdims=True)
-            max_ = np.max(data, keepdims=True)
-            data = 2 * (data - min_) / (max_ - min_) - 1
-        elif 'quantile' in norm_type:
-            quantiles = norm_type.split('_')[1].split('-')
-            quantiles = [float(q) for q in quantiles]
-            low_quantile = np.quantile(data, quantiles[0], keepdims=True)
-            high_quantile = np.quantile(data, quantiles[1], keepdims=True)
-            data = (data - low_quantile) / (high_quantile - low_quantile)
-        elif norm_type == 'max':
-            max_ = np.max(data, keepdims=True)
-            data = data / max_
-        elif norm_type == 'none':
-            pass
-        else:
-            raise ValueError('Invalid normalization method for EMG data')
-        return data
+    def _plot_segment(segment: np.ndarray) -> None:
+        plt.figure()
+        for i in range(16):
+            plt.plot(segment[:, i], label=f'channel {i + 1}')
+        plt.legend()
+        plt.ylim(-200, 200)
+        plt.show()
 
 
 ######################################################
@@ -789,8 +754,12 @@ class Feature_Extractor(ABC):
             segments: tuple of (emg_segments, acc_segments, gyro_segments), emg_segments is a 3d array of shape
             (num_segments, num_channels, segment_length) where num_channels is constant 16, acc_segments is a 3d array of
                       shape (num_segments, num_channels, segment_length) where num_channels is constant 3 (x, y, z - in
-                      that order), gyro data is tbd.
-            kwargs: not used
+                      that order), gyro data is a 3d array of shape (num_segments, num_channels, segment_length) where
+                        num_channels is constant 3 (x, y, z - in that order).
+                        note that acc and gyro data might be unavailable in some recordings, in that case their value
+                        will be None.
+            kwargs: dict
+                any additional arguments that the feature extractor might need.
         """
         pass
 
@@ -799,28 +768,22 @@ class RMS_Feature_Extractor(Feature_Extractor):
     def extract_features(self, segments: (np.array, np.array, np.array), output_shape: tuple = (1, 4, 4)) -> np.array:
         """
         extract the RMS of each emg channel and reshape into a 4x4 array.
-        input:
-            segments: tuple of (emg_segments, acc_segments), emg_segments is a 3d array of shape (num_segments,
-            num_channels, segment_length) where num_channels is constant 16, acc_segments is a 3d array of shape
-            (num_segments, num_channels, segment_length) where num_channels is constant 3 (x, y, z - not in that order)
-            kwargs: not used
-            output_shape: the shape of the output array of each segment, not including the number of segments which will be set as the first
-            dimension (dim 0). the sum of the elements in the tuple must be equal to the number of emg channels - 16.
-        output:
-            features: array of shape (num_segments, 4, 4)
+
+        Parameters
+        ----------
+        segments: tuple of (emg_segments, acc_segments, gyro_segments). for more info check the docstring of the
+                    extract_features method in Feature_Extractor class.
+        output_shape: tuple
+            the desired output shape of the features, default: (1, 4, 4)
+
+        Returns
+        -------
+        features: np.array
+            the extracted features, shape: (num_segments, 4, 4)
         """
         emg_data, _, _ = segments
-
-        if emg_data.ndim == 3:  # offline analysis
-            axis = 2
-            n_windows = emg_data.shape[0]
-        else:  # online analysis
-            axis = 1
-            emg_data = emg_data.T if emg_data.shape[0] > emg_data.shape[1] else emg_data
-            n_windows = 1
-
-        rms = np.atleast_2d(np.sqrt(np.mean(np.square(emg_data), axis=axis)))
-        features = rms.reshape(n_windows, *output_shape)  # reshape to the desired output shape
+        rms = np.atleast_2d(np.sqrt(np.mean(np.square(emg_data), axis=2)))
+        features = rms.reshape(emg_data.shape[0], *output_shape)  # reshape to the desired output shape
         return features
 
 

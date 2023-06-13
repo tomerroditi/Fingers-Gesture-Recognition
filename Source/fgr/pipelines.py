@@ -11,7 +11,7 @@ class Data_Pipeline:
     base_data_files_path: Path = Path(r'I:\My Drive\finger gesture recognition')
     max_gesture_duration: float = 7  # the supposed maximum duration of a gesture in seconds (depends on the
     # protocol), it is used to detect corrupted annotations.
-    annotation_delay_start: float = 0.1  # the delay between the annotation and the start of the gesture in seconds,
+    annotation_delay_start: float = 0.5  # the delay between the annotation and the start of the gesture in seconds,
     # when we segment the data (in discrete mode) we will start the segment from the annotation time + this delay
     annotation_delay_end: float = 0.1  # the delay between the annotation and the end of the gesture in seconds,
     # when we segment the data (in discrete mode) we will end the segment at the annotation time - this delay
@@ -24,8 +24,8 @@ class Data_Pipeline:
     emg_high_freq: float = 400  # high cut-off frequency for the emg bandpass filter
     emg_low_freq: float = 20  # low cut-off frequency for the emg bandpass filter
     emg_notch_freq: float = 50  # notch frequency for the emg notch filter
+    emg_buff_dur: float = 0  # buffer duration in seconds for the emg filters
     emg_norm: str = 'none'  # none, zscore, 01, -11, quantile_#-# --> normalization method for the emg data
-    acc_norm: str = 'none'  # none, zscore, 01, -11, quantile_#-# --> normalization method for the acc data
     features_norm: str = 'max'  # none, zscore, 01, -11, quantile_#-# --> normalization method for the features
     features_extraction_method: str = 'RMS'  # name of the method to extract features from segments, to see available
     # methods see the "extractors" dictionary in the data_manager.py file.

@@ -2,36 +2,30 @@ from Source.fgr.pipelines import Data_Pipeline
 from Source.fgr.data_manager import Data_Manager
 import Source.fgr.models as models
 from warnings import simplefilter
-
-# ignore all future warnings
-simplefilter(action='ignore', category=FutureWarning)
+from pathlib import Path
+import torch
 
 # %% pipeline definition and data manager creation
-pipeline = Data_Pipeline()  # configure the data pipeline you would like to use (check pipelines module for more info)
-dm = Data_Manager([18], pipeline)
+subject_num = 70
+data_path = Path(r'..\data')
+pipeline = Data_Pipeline(base_data_files_path=data_path, emg_sample_rate=250, emg_low_freq=35, emg_high_freq=124)  #
+# configure the data pipeline you would like to use (check pipelines module for more info)
+dm = Data_Manager([subject_num], pipeline)
 print(dm.data_info())
 
 # %% extract datasets from the data manager
-dataset_train = dm.get_dataset(experiments='018_*_4')
-# dataset_test = dm.get_dataset(experiments='018_2_*')
+dataset_train = dm.get_dataset(experiments=f'{subject_num:03d}_*_*')
 
 data_train = dataset_train[0]
-# data_test = dataset_test[0]
-
-# extract labels - labels includes the gesture number and experiment name as well, overall the labels are in the
-# format of "<subject>_<session>_<position>_<gesture>_<iteration_number>"
-labels_train = dataset_train[1]
-# labels_test = dataset_test[1]
-
-# reshape the data to match the model architecture
 data_train = data_train.reshape(data_train.shape[0], 1, 4, 4)  # reshape to fit the CNN input
-# data_test = data_test.reshape(data_test.shape[0], 1, 4, 4)  # reshape to fit the CNN input
+labels_train = dataset_train[1]
 
 # %% set and train a model (cv or not)
-model = models.Net(num_classes=10, dropout_rate=0.3)
+model = models.Net(num_classes=10, dropout_rate=0.1)
 model.fit_model(data_train, labels_train, num_epochs=200, batch_size=64, lr=0.001, l2_weight=0.0001)
-                # test_data=data_test, test_labels=labels_test)
-model.evaluate_model(model.val_data, model.val_labels, cm_title='model results')
+model.evaluate_model(model.train_data, model.train_labels, cm_title='model results')
+torch.save(model, r'../data/070/model.pth')
+# torch.load(r'../data/070/model.pth')
 
 # models, accuracies = model.cv_fit_model(data, labels, num_epochs=200, batch_size=64, lr=0.001, l2_weight=0.0001)
 # # models evaluation

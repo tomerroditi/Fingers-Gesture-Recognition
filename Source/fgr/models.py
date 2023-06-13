@@ -13,6 +13,7 @@ from tqdm import tqdm
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from datetime import datetime
+from collections import Counter
 
 from Source.streamer.data import Data, ConnectionTimeoutError
 from Source.fgr.data_manager import Real_Time_Recording
@@ -42,14 +43,15 @@ class Real_Time_Predictor:
     def majority_vote_predict(self) -> (str, float):
         feats = self.recording.get_feats_for_prediction()
         pred = self.model.classify(feats)
-        self.predictions_stack.append(pred)
+        self.predictions_stack.append(pred[0])
         if len(self.predictions_stack) > self.vote_over:
             self.predictions_stack.pop(0)
         if len(self.predictions_stack) < self.vote_over:
             return 'loading predictions...', 1
 
-        majority = max(set(self.predictions_stack), key=self.predictions_stack.count)
-        confidence = self.predictions_stack.count(majority) / len(self.predictions_stack)
+        counter = Counter(self.predictions_stack)
+        majority = counter.most_common(1)[0][0]
+        confidence = counter[majority] / len(self.predictions_stack)
         return majority, confidence
 
 # todo: add a class for batch prediction (for offline prediction)
@@ -184,7 +186,7 @@ class simple_CNN(nn.Module):
         self.val_labels = np.empty(0)
 
     def cv_fit_model(self, data: np.array, labels: np.array, num_folds: int = 5, batch_size: int = 64,
-                     lr: float = 0.001, l2_weight: float = 0.0001, num_epochs: int = 200) ->\
+                     lr: float = 0.001, l2_weight: float = 0.0001, num_epochs: int = 200, plot_cm: bool = False) ->\
             (list[nn.Module], list[float]):
         """
         This function performs cross validation training on the model
@@ -214,7 +216,7 @@ class simple_CNN(nn.Module):
             curr_model.fit_model(data[train_idx], labels[train_idx], data[val_idx], labels[val_idx], batch_size, lr,
                                  l2_weight, num_epochs)
             models.append(curr_model)
-            accu_vals.append(curr_model.evaluate_model(data[val_idx], labels[val_idx], plot_cm=False))
+            accu_vals.append(curr_model.evaluate_model(data[val_idx], labels[val_idx], plot_cm=plot_cm))
 
         return models, accu_vals
 

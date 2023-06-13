@@ -61,7 +61,7 @@ n_models = min(5, n_repetitions)
 n_classes = 10
 model = models.Net(num_classes=n_classes, dropout_rate=0.1)
 models, accu_vals = model.cv_fit_model(X, labels, num_epochs=150, batch_size=64, lr=0.001, l2_weight=0.0001,
-                                       num_folds=n_models)
+                                       num_folds=n_models, plot_cm=True)
 
 # Evaluate models
 print(f'model average accuracy: {np.mean(accu_vals)}')
