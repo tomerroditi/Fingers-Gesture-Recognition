@@ -15,9 +15,9 @@ from sklearn.model_selection import train_test_split, StratifiedKFold
 from datetime import datetime
 from collections import Counter
 
-from Source.streamer.data import Data, ConnectionTimeoutError
-from Source.fgr.data_manager import Real_Time_Recording
-from Source.fgr.pipelines import Data_Pipeline
+from .data_manager import Real_Time_Recording
+from .pipelines import Data_Pipeline
+from ..streamer.data import Data, ConnectionTimeoutError
 
 
 ##############################################

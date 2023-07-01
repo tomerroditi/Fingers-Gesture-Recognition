@@ -11,7 +11,7 @@ class Data_Pipeline:
     base_data_files_path: Path = Path(r'I:\My Drive\finger gesture recognition')
     max_gesture_duration: float = 7  # the supposed maximum duration of a gesture in seconds (depends on the
     # protocol), it is used to detect corrupted annotations.
-    annotation_delay_start: float = 0.5  # the delay between the annotation and the start of the gesture in seconds,
+    annotation_delay_start: float = 1  # the delay between the annotation and the start of the gesture in seconds,
     # when we segment the data (in discrete mode) we will start the segment from the annotation time + this delay
     annotation_delay_end: float = 0.1  # the delay between the annotation and the end of the gesture in seconds,
     # when we segment the data (in discrete mode) we will end the segment at the annotation time - this delay
