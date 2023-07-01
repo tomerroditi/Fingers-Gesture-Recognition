@@ -1,18 +1,94 @@
+import collections
 import os
+import pickle
+import numpy as np
 
-from psychopy import gui, visual, core, data, logging
-from psychopy.constants import (NOT_STARTED, STARTED, FINISHED)
+from os.path import dirname, join, abspath
+from psychopy import visual, core, event
 from psychopy.hardware import keyboard
 from pathlib import Path
-
-from Source.streamer.data import Data
+from .data_manager import Recording_Emg_Live
+from ..streamer.data import Data
 
 
 class Experiment:
     """This class is used to run a PsychoPy experiment for data collection."""
 
-    def __init__(self):
+    def __init__(self, subject_num: int = 0, session_num: int = 0, position_num: int = 0, trial_num: int = 0):
+        """Initialize the experiment.
+
+        Parameters
+        ----------
+        subject_num : int, optional
+            Subject number. The default is 0.
+        session_num : int, optional
+            Session number. The default is 0.
+        position_num : int, optional
+            Position number. The default is 0.
+        trial_num : int, optional
+            Trial number. The default is 0.
+        """
+        self.subject_num = subject_num
+        self.session_num = session_num
+        self.position_num = position_num
+        self.trial_num = trial_num
+        self.predictions = collections.defaultdict(list)
+
         self.data = None
+        self.exit = False  # Flag to exit the experiment
+        self.img_dir = join(dirname(dirname(dirname(abspath(__file__)))), 'images')
+        self.file_name = f"subject-{subject_num:03d}_position-{position_num:02d}_" \
+                         f"session-{session_num:02d}_trial-{trial_num:02d}"
+        self.keyboard = keyboard.Keyboard(backend='iohub')
+        self.win = visual.Window(fullscr=True, screen=0, color=[-1, -1, -1], units='height', monitor='default')
+
+    def run(self, data_collector: Data = None, n_repetitions: int = 10, img_sec: float = 5,
+            instruction_secs: float = 4, relax_sec: float = 0.5, pipeline=None, model=None):
+        """
+        Run the experiment. in case rec_obj and model are provided each performed gesture will be classified by the
+        model and will give us an instant feedback.
+
+        Parameters
+        ----------
+        data_collector : Data
+            object to send annotations to.
+        n_repetitions : int, optional
+            Number of repetitions of each gesture during data collection. The default is 10.
+        img_sec : float, optional
+            Number of seconds to display each image. The default is 5.
+        instruction_secs : float, optional
+            Number of seconds to display the instruction text. The default is 4.
+        relax_sec : float, optional
+            Number of seconds to relax between gestures. The default is 0.5.
+        pipeline : Data_Pipeline, optional
+            a data preprocessing pipeline. The default is None.
+        model : torch.nn.Module, optional
+            a trained model. The default is None.
+        """
+        # start recording data
+        if data_collector is not None:
+            self.data = data_collector
+            path = Path(__file__).parent.parent.parent
+            self.data.save_as = str(path / f'data/{self.subject_num:03d}/{self.file_name}')
+            # check if file name already exists, if so add to the trial number until it doesn't
+            while os.path.exists(self.data.save_as):
+                trial_num = int(self.data.save_as.split('_')[-1].split('-')[-1]) + 1
+                self.file_name = '_'.join(self.file_name.split('_')[:-1]) + f'_trial-{trial_num:03d}'
+                self.data.save_as = str(path / f'data/{self.subject_num:03d}/{self.file_name}')
+            self.data.start()
+
+        # welcome screen
+        self.welcome_screen()
+
+        # collect data
+        image_files = [f for f in os.listdir(self.img_dir) if f.endswith('.JPG') or f.endswith('.jpg')]
+        for image_file in image_files:
+            self.gesture_screen(image_file, n_repetitions, img_sec, instruction_secs, relax_sec, pipeline, model)
+            if self.exit:
+                break
+
+        self.win.close()
+        self.save_data()
 
     def trigger(self, msg, verbose: bool = True):
 
@@ -23,355 +99,111 @@ class Experiment:
         elif verbose:
             print(f'TRIGGER: {msg}')
 
-    # todo: refactor this method - break it into smaller methods to achieve better readability and maintainability
-    def run(self,
-            data_obj: Data,
-            data_dir: str,
-            n_repetitions: int = 10,
-            img_secs: float = 5,
-            fullscreen: bool = True,
-            screen_num: int = 0,
-            exp_num: int = 0) -> Path:
-        """
-        Run the experiment.
-
-        Parameters
-        ----------
-        data_obj : Data
-            Data object to send annotations to.
-        data_dir : str
-            Directory in which to save data.
-        n_repetitions : int, optional
-            Number of repetitions of each gesture during data collection. The default is 10.
-        img_secs : float, optional
-            Number of seconds to display each image. The default is 5.
-        fullscreen : bool, optional
-            Whether to display the experiment in fullscreen. The default is True.
-        screen_num : int, optional
-            Screen number to display the experiment on. The default is 0.
-        exp_num: int,optional
-        """
-
-        """ HARD-CODED EXPERIMENT PARAMETERS """
-        # Dvir's try #
-        # Get the current directory of the script
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        # Traverse up the directory structure twice to reach 'FGR' directory
-        project_dir = os.path.dirname(os.path.dirname(script_dir))
-        # Construct the absolute path to the image file
-        img_dir = os.path.join(project_dir, 'images')
-        # it worked!
-
-        # img_dir = r'C:\Users\YH006_new\Desktop\Fingers-Gesture-Recognition\images'
-        instruction_secs = 4
-        relax_secs = 0.5
-        """ END PARAMETERS """
-
-        self.data = data_obj
-
-        img_names = os.listdir(img_dir)
-
-        # Ensure that relative paths start from the same directory as this script
-        _thisDir = os.path.dirname(os.path.abspath(__file__))
-        os.chdir(_thisDir)
-        # Store info about the experiment session
-        exp_info = {'participant': '', 'session': '', 'position': ''}
-        dlg = gui.DlgFromDict(dictionary=exp_info, sortKeys=False, title='fill in experiment info')
-        if not dlg.OK:
-            core.quit()  # user pressed cancel
-        exp_info['date'] = data.getDateStr()  # add a simple timestamp
-        exp_info['expName'] = 'fgr - real time'
-        exp_info['psychopyVersion'] = '2022.1.3'
-
-        # make sure the save dir exists and guve the future file a unique name according to the experiment info
-        os.makedirs(data_dir, exist_ok=True)
-        self.data.save_as = str(Path(data_dir, f"GR_pos{exp_info['position']}_{exp_info['participant'].rjust(3, '0')}_S{exp_info['session']}_rep{exp_num}_BT.edf"))
-
-        # start recording data
-        self.data.start()
-
-        # save a log file for detail verbose info
-        logging.console.setLevel(logging.WARNING)  # this outputs to the screen, not a file
-
-        frame_tolerance = 0.001  # how close to onset before 'same' frame
-
-        # Start Code - component code to be run after the window creation
-
-        # Set up the Window
-        win = visual.Window(
-            size=[1920, 1080],
-            fullscr=fullscreen,
-            screen=screen_num,
-            winType='pyglet', allowGUI=False, allowStencil=False,
-            monitor='testMonitor', color=[-1.0000, -1.0000, -1.0000], colorSpace='rgb',
-            blendMode='avg', useFBO=True,
-            units='height')
-        # store frame rate of monitor if we can measure it
-        exp_info['frameRate'] = win.getActualFrameRate()
-
-        # # create a default keyboard (e.g. to check for escape)
-        # default_keyboard = keyboard.Keyboard(backend='iohub')
-
-        # Initialize components for Routine "Welcome"
-        welcome_clock = core.Clock()
+    def welcome_screen(self):
         welcome_text = visual.TextStim(
-            win=win, name='welcome_text',
-            text='A series of images will be shown on screen.\n\n\n'
-                 'Perform the gesture only when\n"Perform gesture"\nis written above the image.\n\n\n'
-                 'Relax your arm between gestures.\n\n\n'
-                 '(Press space when ready.)',
-            font='Calibri Light',
-            pos=(0, 0), height=0.04, wrapWidth=None, ori=0.0,
-            color=[1.0000, 1.0000, 1.0000], colorSpace='rgb', opacity=None,
-            languageStyle='RTL'
-        )
-        key_resp = keyboard.Keyboard()
+                win=self.win, name='welcome_text',
+                # edd to the text below which position we are in
+                text='A series of images will be shown on screen.\n\n\n'
+                     f'You are in position {self.position_num}.\n\n\n'
+                     'Perform the gesture only when\n"Perform gesture"\nis written above the image.\n\n\n'
+                     'Relax your arm between gestures.\n\n\n'
+                     '(Press any key when ready.)', pos=(0, 0), height=0.04)
 
-        # Initialize components for Routine "TwoFingersInst"
-        img_text = visual.TextStim(
-            win=win, name='img_text',
-            text="PLACEHOLDER",
-            font='Calibri',
-            pos=(0, 0.3), height=0.04, wrapWidth=None, ori=0.0,
-            color='white', colorSpace='rgb', opacity=None,
-            languageStyle='LTR'
-        )
+        welcome_text.draw()
+        self.win.flip()
+        event.waitKeys()  # Wait for a key press to start the experiment
 
-        # Initialize image routines
-        imgs = {}
-        clocks = {}
-        for n, img_name in enumerate(img_names):
-            clock = core.Clock()
-            img = visual.ImageStim(
-                win=win,
-                name=img_name,
-                image=os.path.join(img_dir, img_name),
-                mask=None,
-                anchor='center', ori=0.0, size=0.5, pos=(0, 0),
-                color=(1, 1, 1), colorSpace='rgb', opacity=None,
-                flipHoriz=False, flipVert=False,
-                texRes=128.0, interpolate=True, depth=0.0
-            )
-            imgs[img_name] = img
-            clocks[img_name] = clock
+    def gesture_screen(self, image_file, n_repetitions, img_sec, instruction_secs, relax_sec, pipeline, model):
+        instruct_text = 'When "Perform gesture" appears, perform this gesture:'
+        perform_text = 'Perform gesture'
+        relax_text = 'Relax arm'
+        text_kwargs = {'pos': (0, 0.3), 'height': 0.04}
 
-        # Create some handy timers
-        routine_timer = core.CountdownTimer()  # to track time remaining of each (non-slip) routine
+        image_path = os.path.join(self.img_dir, image_file)
+        image_name = image_file.split('.')[0]
+        annotation = f"{image_name}_{self.subject_num:03d}_{self.session_num}_{self.position_num}_{self.trial_num}"
 
-        # ------Prepare to start Routine "Welcome"-------
-        continue_routine = True
-        # update component parameters for each repeat
-        # keep track of which components have finished
-        key_resp.keys = []
-        key_resp.rt = []
-        _key_resp_allKeys = []
-        welcome_components = [welcome_text, key_resp]
-        for thisComponent in welcome_components:
-            thisComponent.tStart = None
-            thisComponent.tStop = None
-            thisComponent.tStartRefresh = None
-            thisComponent.tStopRefresh = None
-            if hasattr(thisComponent, 'status'):
-                thisComponent.status = NOT_STARTED
-        # reset timers
-        _timeToFirstFrame = win.getFutureFlipTime(clock="now")
-        welcome_clock.reset(-_timeToFirstFrame)  # t0 is time of first possible flip
-        n_frame = -1
+        image = visual.ImageStim(self.win, image=image_path, size=0.5)
+        text_instruction = visual.TextStim(self.win, text=instruct_text, **text_kwargs)
+        text_perform = visual.TextStim(self.win, text=perform_text, color=(0.2, 1, 0.2), **text_kwargs)
+        text_relax = visual.TextStim(self.win, text=relax_text, **text_kwargs)
 
-        # -------Run Routine "Welcome"-------
-        while continue_routine:
-            # get current time
-            t = welcome_clock.getTime()
-            t_flip = win.getFutureFlipTime(clock=welcome_clock)
-            t_flip_global = win.getFutureFlipTime(clock=None)
-            n_frame = n_frame + 1  # number of completed frames (so 0 is the first frame)
-            # update/draw components on each frame
+        # instruction block
+        text_instruction.draw()
+        image.draw()
+        self.win.flip()
+        core.wait(instruction_secs)
 
-            # *instructions_text* updates
-            if welcome_text.status == NOT_STARTED and t_flip >= -frame_tolerance:
-                # keep track of start time/frame for later
-                welcome_text.frameNStart = n_frame  # exact frame index
-                welcome_text.tStart = t  # local t and not account for scr refresh
-                welcome_text.tStartRefresh = t_flip_global  # on global time
-                win.timeOnFlip(welcome_text, 'tStartRefresh')  # time at next scr refresh
-                welcome_text.setAutoDraw(True)
+        for i in range(n_repetitions):
+            # perform gesture block
+            text_perform.draw()
+            image.draw()
+            self.win.flip()
+            self.trigger(f"Start_{annotation}_{i:02d}")
+            core.wait(img_sec)
+            self.trigger(f"Release_{annotation}_{i:02d}")
 
-            # *key_resp* updates
-            wait_on_flip = False
-            if key_resp.status == NOT_STARTED and t_flip >= 0.0-frame_tolerance:
-                # keep track of start time/frame for later
-                key_resp.frameNStart = n_frame  # exact frame index
-                key_resp.tStart = t  # local t and not account for scr refresh
-                key_resp.tStartRefresh = t_flip_global  # on global time
-                win.timeOnFlip(key_resp, 'tStartRefresh')  # time at next scr refresh
-                # add timestamp to datafile
-                key_resp.status = STARTED
-                # keyboard checking is just starting
-                wait_on_flip = True
-                win.callOnFlip(key_resp.clock.reset)  # t=0 on next screen flip
-                win.callOnFlip(key_resp.clearEvents, eventType='keyboard')  # clear events on next screen flip
-            if key_resp.status == STARTED and not wait_on_flip:
-                these_keys = key_resp.getKeys(keyList=['space'], waitRelease=False)
-                _key_resp_allKeys.extend(these_keys)
-                if len(_key_resp_allKeys):
-                    key_resp.keys = _key_resp_allKeys[-1].name  # just the last key pressed
-                    key_resp.rt = _key_resp_allKeys[-1].rt
-                    # a response ends the routine
-                    continue_routine = False
+            if pipeline is not None and model is not None:
+                self.predict_block(pipeline, model, image_name, text_kwargs)
 
-            # # check for quit (typically the Esc key)
-            # if default_keyboard.getKeys(keyList=["escape"]):
-            #     core.quit()
+            # relax arm block
+            text_relax.draw()
+            image.draw()
+            self.win.flip()
+            core.wait(relax_sec)
 
-            # check if all components have finished
-            if not continue_routine:  # a component has requested a forced-end of Routine
-                break
-            continue_routine = False  # will revert to True if at least one component still running
-            for thisComponent in welcome_components:
-                if hasattr(thisComponent, "status") and thisComponent.status != FINISHED:
-                    continue_routine = True
-                    break  # at least one component has not yet finished
+            # check for escape key press and end experiment if pressed
+            if self.keyboard.getKeys(keyList=["escape"]):
+                self.save_data()
+                self.win.close()
+                self.exit = True
+                return
 
-            # refresh the screen
-            if continue_routine:  # don't flip if this routine is over or we'll get a blank screen
-                win.flip()
+    def predict_block(self, pipeline, model, image_name, text_kwargs):
+        """Predict the performed gesture and give a feedback to the user."""
+        # get the relevant data
+        emg_data, annotations = self.get_last_gesture_data(pipeline.emg_sample_rate)
+        # create a recording object
+        rec = Recording_Emg_Live(emg_data, annotations, pipeline)
+        dataset = rec.get_dataset()  # (data, labels)
+        predictions = model.classify(dataset[0])
+        # majority voting
+        counter = collections.Counter(predictions)
+        majority = counter.most_common(1)[0][0]
+        confidence = counter[majority] / len(predictions)
+        self.predictions[image_name].append(majority)
+        # give a feedback to the user
+        text = 'Correct' if majority == image_name else 'Wrong'
+        text = f'{text} \n\n\npredicted - {majority} \n\n\nconfidence - {confidence}'
+        text = visual.TextStim(self.win, text=text, **text_kwargs)
+        text.draw()
+        self.win.flip()
+        core.wait(1)
 
-        # -------Ending Routine "Welcome"-------
-        for thisComponent in welcome_components:
-            if hasattr(thisComponent, "setAutoDraw"):
-                thisComponent.setAutoDraw(False)
-        # the Routine "Welcome" was not non-slip safe, so reset the non-slip timer
-        routine_timer.reset()
+    def get_last_gesture_data(self, sr) -> (np.ndarray, list[(float, float, str)]):
+        """Chop the data to the relevant part."""
+        annotations = self.data.annotations[-2:]
+        start_time = annotations[0][0]
+        duration = annotations[1][0] - start_time
+        start_idx = int((start_time - 5) * sr)
+        emg_data = self.data.exg_data[:, start_idx:]
+        start_time = 5
+        end_time = start_time + duration
+        annotations = [(start_time, annotations[0][1], annotations[0][2]),
+                       (end_time, annotations[1][1], annotations[1][2])]
+        return emg_data, annotations
 
-        for img_name in img_names:
-            trigger_name = os.path.splitext(img_name)[0]
-            trials = data.TrialHandler(nReps=n_repetitions,
-                                       method='random',
-                                       extraInfo=exp_info,
-                                       originPath=-1,
-                                       trialList=[None],
-                                       seed=None,
-                                       name=trigger_name)
-            for n_rep, trial in enumerate(trials):
+    def save_data(self, data_dir: str = 'data'):
+        """Save the data to a pickle file and to an edf file."""
+        if self.data is None:
+            pass
+        else:
+            os.makedirs(data_dir, exist_ok=True)  # ensure path exists
+            # save data to pickle file
+            my_dict = {'emg': self.data.exg_data, 'annotations': self.data.annotations}
+            my_path = Path(self.data.save_as)
+            with open(my_path.with_suffix('.pickle'), 'wb') as f:
+                pickle.dump(my_dict, f)
 
-                instruction_secs_rep = instruction_secs if n_rep == 0 else 0
-
-                if trial is not None:
-                    for paramName in trial:
-                        exec('{} = trial[paramName]'.format(paramName))
-
-                # ------Prepare to start Routine "ThreeFingers"-------
-                continue_routine = True
-                # routine_timer.addTime(5)
-                # update component parameters for each repeat
-                imgs[img_name].setImage(os.path.join(img_dir, img_name))
-
-                # keep track of which components have finished
-                components = [imgs[img_name], img_text]
-                for component in components:
-                    component.tStart = None
-                    component.tStop = None
-                    component.tStartRefresh = None
-                    component.tStopRefresh = None
-                    if hasattr(component, 'status'):
-                        component.status = NOT_STARTED
-                # reset timers
-                _timeToFirstFrame = win.getFutureFlipTime(clock="now")
-                clocks[img_name].reset(-_timeToFirstFrame)  # t0 is time of first possible flip\
-                n_frame = -1
-
-                # -------Run Routine-------
-                while continue_routine:
-                    # get current time
-                    t = clocks[img_name].getTime()
-                    t_flip = win.getFutureFlipTime(clock=clocks[img_name])
-                    t_flip_global = win.getFutureFlipTime(clock=None)
-                    # update/draw components on each frame
-
-                    # image updates
-                    if imgs[img_name].status == NOT_STARTED:
-                        # keep track of start time/frame for later
-                        imgs[img_name].tStart = t  # local t and not account for scr refresh
-                        imgs[img_name].tStartRefresh = t_flip_global  # on global time
-                        win.timeOnFlip(imgs[img_name], 'tStartRefresh')  # time at next scr refresh
-                        imgs[img_name].setAutoDraw(True)
-                    if imgs[img_name].status == STARTED:
-                        if t_flip_global > imgs[img_name].tStartRefresh + instruction_secs_rep + img_secs - frame_tolerance:
-                            # keep track of stop time/frame for later
-                            imgs[img_name].tStop = t  # not accounting for scr refresh
-                            # win.timeOnFlip(imgs[img_name], 'tStopRefresh')  # time at next scr refresh
-                            imgs[img_name].setAutoDraw(False)
-
-                    # # check for quit (typically the Esc key)
-                    # if default_keyboard.getKeys(keyList=["escape"]):
-                    #     core.quit()
-
-                    # text updates must come AFTER image updates in order to be placed on top
-                    if img_text.status == NOT_STARTED and t_flip >= -frame_tolerance:
-                        # keep track of start time/frame for later
-                        img_text.tStart = t  # local t and not account for scr refresh
-                        img_text.tStartRefresh = t_flip_global  # on global time
-                        win.timeOnFlip(img_text, 'tStartRefresh')  # time at next scr refresh
-                        img_text.setText("When \"Perform gesture\" appears, perform this gesture:")
-                        img_text.setColor((1, 1, 1))
-                        img_text.setAutoDraw(True)
-                    if img_text.status == STARTED:
-                        # is it time to stop? (based on global clock, using actual start)
-                        if t_flip_global > img_text.tStartRefresh + instruction_secs_rep + img_secs + relax_secs - frame_tolerance:
-                            # keep track of stop time/frame for later
-                            img_text.tStop = t  # not accounting for scr refresh
-                            img_text.frameNStop = n_frame  # exact frame index
-                            win.timeOnFlip(img_text, 'tStopRefresh')  # time at next scr refresh
-                            img_text.setAutoDraw(False)
-                        elif t_flip_global > img_text.tStartRefresh + instruction_secs_rep + img_secs - frame_tolerance:
-                            txt = "Relax arm."
-                            if img_text.text != txt:
-                                img_text.setText(txt)
-                                img_text.setColor((0.9, 0, 0))
-                                self.trigger(f"Release_{trigger_name}_{n_rep:02d}")
-                        elif t_flip_global > img_text.tStartRefresh + instruction_secs_rep + img_secs - frame_tolerance - 0.05:
-                            img_text.setText("")
-                        elif t_flip_global > img_text.tStartRefresh + instruction_secs_rep - frame_tolerance:
-                            txt = "Perform gesture:"
-                            if img_text.text != txt:
-                                img_text.setText(txt)
-                                self.trigger(f"Start_{trigger_name}_{n_rep:02d}")
-                                img_text.setColor((0.2, 1, 0.2))
-                        elif t_flip_global > img_text.tStartRefresh + instruction_secs_rep - frame_tolerance - 0.05:
-                            img_text.setText("")
-                        else:
-                            pass
-
-                    # check if all components have finished
-                    if not continue_routine:  # a component has requested a forced-end of Routine
-                        break
-                    continue_routine = False  # will revert to True if at least one component still running
-                    for component in components:
-                        if hasattr(component, "status") and component.status != FINISHED:
-                            continue_routine = True
-                            break  # at least one component has not yet finished
-
-                    # refresh the screen
-                    if continue_routine:  # don't flip if this routine is over or we'll get a blank screen
-                        win.flip()
-
-                # -------Ending Routine-------
-                for component in components:
-                    if hasattr(component, "setAutoDraw"):
-                        component.setAutoDraw(False)
-                trials.addData(f'{imgs[img_name]}.started', imgs[img_name].tStartRefresh)
-                trials.addData(f'{imgs[img_name]}.stopped', imgs[img_name].tStopRefresh)\
-
-                # the Routine "ThreeFingers" was not non-slip safe, so reset the non-slip timer
-                routine_timer.reset()
-
-        # Flip one final time so any remaining win.callOnFlip() and win.timeOnFlip() tasks get executed before quitting
-        win.flip()
-
-        self.data.stop()
-        logging.flush()
-        # make sure everything is closed down
-        win.close()
-
-        # return the location of the saved data
-        return self.data.save_as
+            # save data to edf file
+            self.data.save_data()

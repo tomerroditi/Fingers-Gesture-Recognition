@@ -16,7 +16,7 @@ def data_collection(host_name: str, port: int, data_dir: str, shared_dict: dict,
     j = 0
     while True:
         j += 1
-        n = 8 if j == 1 else 1
+        n = 10 if j == 1 else 1
         data_collector = Data(host_name, port, timeout_secs=timeout, verbose=verbose)
 
         # PsychoPy experiment
@@ -24,7 +24,9 @@ def data_collection(host_name: str, port: int, data_dir: str, shared_dict: dict,
         file_path = exp.run(data_collector, data_dir, n_repetitions=n, fullscreen=False, img_secs=5,
                             screen_num=0, exp_num=j)
 
-        time.sleep(5)
+        # wait until the file path is truely exist
+        while not Path(file_path).exists():
+            time.sleep(0.1)
         # Get data and labels and extend the dataset
         pipe = Data_Pipeline(emg_sample_rate=250, emg_low_freq=35, emg_high_freq=124)
         rec_obj = Recording_Emg([Path(file_path)], pipe)
