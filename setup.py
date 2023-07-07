@@ -1,5 +1,6 @@
 from setuptools import setup
 
+# todo: fix the setup.py file
 setup(
     name='fgr',
     version='1.0',

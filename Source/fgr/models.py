@@ -1,4 +1,5 @@
 import copy
+import time
 import random
 import numpy as np
 import sklearn.preprocessing
@@ -11,7 +12,7 @@ import torch.nn.functional as functional
 from torch.utils.data import TensorDataset, DataLoader
 from tqdm import tqdm
 from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.model_selection import StratifiedKFold
 from datetime import datetime
 from collections import Counter
 
@@ -33,7 +34,7 @@ class Real_Time_Predictor:
         # Confirm initial data retrieval before continuing (or raise Error if timeout)
         init_time = datetime.now()
         while not (data_stream.is_connected and data_stream.has_data):
-            plt.pause(0.01)
+            time.sleep(0.1)
             if (datetime.now() - init_time).seconds > max_timeout:
                 if not data_stream.is_connected:
                     raise ConnectionTimeoutError
@@ -54,62 +55,56 @@ class Real_Time_Predictor:
         confidence = counter[majority] / len(self.predictions_stack)
         return majority, confidence
 
-# todo: add a class for batch prediction (for offline prediction)
-
 
 ##############################################
 # Models
 ##############################################
-class pre_training_utils:
-    @staticmethod
-    def train_test_split_by_gesture(*arrays: np.array, labels: np.array = None, test_size: float = 0.2, seed: int = 42)\
-            -> (np.array, np.array, np.array, np.array) or (list[np.array], list[np.array], np.array, np.array):
+
+class simple_CNN(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.label_encoder = LabelEncoder()
+        self.accu_vals = {}
+        self.loss_vals = {}
+        self.train_data = np.empty(0)
+        self.train_labels = np.empty(0)
+        self.val_data = np.empty(0)
+        self.val_labels = np.empty(0)
+
+    def cv_fit_model(self, data: np.array, labels: np.array, num_folds: int = 5, batch_size: int = 64,
+                     lr: float = 0.001, l2_weight: float = 0.0001, num_epochs: int = 200, plot_cm: bool = False) ->\
+            (list[nn.Module], list[float]):
         """
-        split data into train test sets, each set will contain data from different gestures repetitions, e.g. if we have
-        10 repetitions of "fist" gestures from an experiment ('001_1_1_fist_1', '001_1_1_fist_2', ..., '001_1_1_fist_10')
-        then the fist 8 repetitions will be in the train set and the last 2 will be in the test set.
+        This function performs cross validation training on the model
         inputs:
-            arrays: numpy arrays, each array should have the same number of rows (samples) as the labels array
-            labels: numpy array of labels, each label should be a string
-            test_size: float, the percentage of the data to be used for testing
+            data: numpy array of data
+            labels: numpy array of labels
+            num_folds: int, the number of folds to split the data to
+            batch_size: int, the size of the batches to be used in the data loaders
+            lr: float, the learning rate to be used in the optimizer
+            l2_weight: float, the weight of the l2 regularization
+            num_epochs: int, the number of epochs to train the model
         outputs:
-            train_arrays: list of numpy arrays, each array contains the train data (in the same order as the input
-                          arrays), if only one array was given as input then a single numpy array will be returned
-            test_arrays: list of numpy arrays, each array contains the test data (in the same order as the input
-                         arrays), if only one array was given as input then a single numpy array will be returned
-            train_labels: numpy array, contains the train labels
-            test_labels: numpy array, contains the test labels
+            models: list of models, each model is a copy of the original model fitted on a different fold
+            accu_vals: list of floats, the accuracy of each model on its validation fold
         """
-        unique_labels = np.unique(labels)
-        unique_labels_no_num = np.char.rstrip(unique_labels, '_0123456789')
+        fold_idx = self.folds_split_by_gesture(labels, num_folds)
+        # fit the label encoder
+        self.label_encoder.fit(np.char.strip(labels, '_0123456789'))
+        # cv training loop
+        models = []
+        accu_vals = []
+        for fold in np.unique(fold_idx):
+            curr_model = copy.deepcopy(self)  # create a copy of the model for each fold
+            # split the data to train and test of the current fold
+            train_idx = fold_idx != fold
+            val_idx = fold_idx == fold
+            curr_model.fit_model(data[train_idx], labels[train_idx], data[val_idx], labels[val_idx], batch_size, lr,
+                                 l2_weight, num_epochs)
+            models.append(curr_model)
+            accu_vals.append(curr_model.evaluate_model(data[val_idx], labels[val_idx], plot_cm=plot_cm))
 
-        # in case there is a gesture with one repetition we will discard it since we cant split it to train and test
-        only_one_rep = np.array([np.sum(unique_labels_no_num == label) == 1 for label in unique_labels_no_num])
-        print(f'number of gestures with only one repetition: {np.sum(only_one_rep)}\n'
-              f'Their names are: {unique_labels_no_num[only_one_rep]}')
-        unique_labels = unique_labels[np.logical_not(only_one_rep)]
-        unique_labels_no_num = unique_labels_no_num[np.logical_not(only_one_rep)]
-
-        # split each gesture of each subject to train and test
-        train_gestures, test_gestures = train_test_split(unique_labels, stratify=unique_labels_no_num, test_size=test_size,
-                                                         random_state=seed)
-
-        # now split the data itself to train and test
-        train_arrays = []
-        test_arrays = []
-        for array in arrays:
-            train_arrays.append(array[np.isin(labels, train_gestures)])
-            test_arrays.append(array[np.isin(labels, test_gestures)])
-
-        # split the labels to train and test
-        train_labels = labels[np.isin(labels, train_gestures)]
-        test_labels = labels[np.isin(labels, test_gestures)]
-
-        # in case we have more than one array we will return a list of arrays, otherwise we will return a single array
-        if len(arrays) == 1:
-            return train_arrays[0], test_arrays[0], train_labels, test_labels
-        else:
-            return train_arrays, test_arrays, train_labels, test_labels
+        return models, accu_vals
 
     @staticmethod
     def folds_split_by_gesture(labels: np.array = None, num_folds: int = 5, seed: int = 42) -> np.array:
@@ -150,6 +145,41 @@ class pre_training_utils:
 
         return fold_idx
 
+    def fit_model(self, train_data: np.array, train_labels: np.array, val_data: np.array = None,
+                  val_labels: np.array = None, batch_size: int = 64, lr=0.001,
+                  l2_weight: float = 0.0001, num_epochs: int = 200) -> None:
+        """This function trains a model and returns the train and test loss and accuracy"""
+        if val_data is not None and val_labels is None:
+            raise ValueError('If test data is provided, test labels must be provided as well')
+
+        # save the data and labels for later use
+        self.train_data = train_data
+        self.train_labels = train_labels
+        self.val_data = val_data
+        self.val_labels = val_labels
+
+        # strip the labels from the numbers - the model will predict the gesture name and not the repetition number or
+        # subject number (the numbers are used for data splitting)
+        train_labels = np.char.strip(train_labels, '_0123456789')
+        train_labels = self.label_encoder.fit_transform(train_labels)
+        # create data loaders
+        train_dl = self.create_dataloader(train_data, train_labels, batch_size, drop_last=True)
+
+        val_dl = None
+        if val_labels is not None:
+            val_labels = np.char.strip(val_labels, '_0123456789')
+            val_labels = self.label_encoder.transform(val_labels)
+            val_dl = self.create_dataloader(val_data, val_labels, batch_size, drop_last=False)
+
+        # train the model
+        optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=l2_weight)
+        loss_func = nn.CrossEntropyLoss()
+        # move the model to the gpu if available
+        if torch.cuda.is_available():
+            self.cuda()
+
+        self.train_model(train_dl, val_dl, num_epochs, optimizer, loss_func)
+
     @staticmethod
     def create_dataloader(data: np.array, labels: np.array, batch_size: int = 64, drop_last: bool = True) -> (
             DataLoader, DataLoader):
@@ -172,88 +202,6 @@ class pre_training_utils:
         dataloader = DataLoader(dataset_torch, batch_size=batch_size, shuffle=True, drop_last=drop_last)
 
         return dataloader
-
-
-class simple_CNN(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.label_encoder = LabelEncoder()
-        self.accu_vals = {}
-        self.loss_vals = {}
-        self.train_data = np.empty(0)
-        self.train_labels = np.empty(0)
-        self.val_data = np.empty(0)
-        self.val_labels = np.empty(0)
-
-    def cv_fit_model(self, data: np.array, labels: np.array, num_folds: int = 5, batch_size: int = 64,
-                     lr: float = 0.001, l2_weight: float = 0.0001, num_epochs: int = 200, plot_cm: bool = False) ->\
-            (list[nn.Module], list[float]):
-        """
-        This function performs cross validation training on the model
-        inputs:
-            data: numpy array of data
-            labels: numpy array of labels
-            num_folds: int, the number of folds to split the data to
-            batch_size: int, the size of the batches to be used in the data loaders
-            lr: float, the learning rate to be used in the optimizer
-            l2_weight: float, the weight of the l2 regularization
-            num_epochs: int, the number of epochs to train the model
-        outputs:
-            models: list of models, each model is a copy of the original model fitted on a different fold
-            accu_vals: list of floats, the accuracy of each model on its validation fold
-        """
-        fold_idx = pre_training_utils.folds_split_by_gesture(labels, num_folds)
-        # fit the label encoder
-        self.label_encoder.fit(np.char.strip(labels, '_0123456789'))
-        # cv training loop
-        models = []
-        accu_vals = []
-        for fold in np.unique(fold_idx):
-            curr_model = copy.deepcopy(self)  # create a copy of the model for each fold
-            # split the data to train and test of the current fold
-            train_idx = fold_idx != fold
-            val_idx = fold_idx == fold
-            curr_model.fit_model(data[train_idx], labels[train_idx], data[val_idx], labels[val_idx], batch_size, lr,
-                                 l2_weight, num_epochs)
-            models.append(curr_model)
-            accu_vals.append(curr_model.evaluate_model(data[val_idx], labels[val_idx], plot_cm=plot_cm))
-
-        return models, accu_vals
-
-    def fit_model(self, train_data: np.array, train_labels: np.array, val_data: np.array = None,
-                  val_labels: np.array = None, batch_size: int = 64, lr=0.001,
-                  l2_weight: float = 0.0001, num_epochs: int = 200) -> None:
-        """This function trains a model and returns the train and test loss and accuracy"""
-        if val_data is not None and val_labels is None:
-            raise ValueError('If test data is provided, test labels must be provided as well')
-
-        # save the data and labels for later use
-        self.train_data = train_data
-        self.train_labels = train_labels
-        self.val_data = val_data
-        self.val_labels = val_labels
-
-        # strip the labels from the numbers - the model will predict the gesture name and not the repetition number or
-        # subject number (the numbers are used for data splitting)
-        train_labels = np.char.strip(train_labels, '_0123456789')
-        train_labels = self.label_encoder.fit_transform(train_labels)
-        # create data loaders
-        train_dl = pre_training_utils.create_dataloader(train_data, train_labels, batch_size, drop_last=True)
-
-        val_dl = None
-        if val_labels is not None:
-            val_labels = np.char.strip(val_labels, '_0123456789')
-            val_labels = self.label_encoder.transform(val_labels)
-            val_dl = pre_training_utils.create_dataloader(val_data, val_labels, batch_size, drop_last=False)
-
-        # train the model
-        optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=l2_weight)
-        loss_func = nn.CrossEntropyLoss()
-        # move the model to the gpu if available
-        if torch.cuda.is_available():
-            self.cuda()
-
-        self.train_model(train_dl, val_dl, num_epochs, optimizer, loss_func)
 
     def train_model(self, train_dataloader: DataLoader, val_dataloader: DataLoader, num_epochs: int,
                     optimizer, loss_function):
@@ -325,8 +273,7 @@ class simple_CNN(nn.Module):
         unique_labels_pred = []
         for label in unique_labels:
             curr_predictions = predictions[labels == label]  # get the predictions of the current label
-            # predict the gesture by the most common string in the curr_prediction array
-
+            # majority voting - get a single prediction per gesture
             unique, pos = np.unique(curr_predictions, return_inverse=True)  # Finds unique elements and their positions
             pred = unique[np.bincount(pos).argmax()]
             unique_labels_pred.append(pred)

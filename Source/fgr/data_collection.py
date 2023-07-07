@@ -65,17 +65,18 @@ class Experiment:
         model : torch.nn.Module, optional
             a trained model. The default is None.
         """
-        # start recording data
-        if data_collector is not None:
-            self.data = data_collector
-            path = Path(__file__).parent.parent.parent
-            self.data.save_as = str(path / f'data/{self.subject_num:03d}/{self.file_name}')
+        self.data = data_collector
+        if self.data is not None:  # set a path to the save data in case we are recording
+            path = Path(__file__).parent.parent.parent / f'data/{self.subject_num:03d}'
+            if not path.exists():
+                path.mkdir(parents=True)
+            self.data.save_as = str(path / f'{self.file_name}.edf')
             # check if file name already exists, if so add to the trial number until it doesn't
-            while os.path.exists(self.data.save_as):
-                trial_num = int(self.data.save_as.split('_')[-1].split('-')[-1]) + 1
-                self.file_name = '_'.join(self.file_name.split('_')[:-1]) + f'_trial-{trial_num:03d}'
-                self.data.save_as = str(path / f'data/{self.subject_num:03d}/{self.file_name}')
-            self.data.start()
+            while os.path.exists(self.data.save_as) or os.path.exists(self.data.save_as[:-4] + '.pkl'):
+                trial_num = int(self.data.save_as.split('_')[-1].split('-')[-1].split('.')[0]) + 1
+                self.file_name = '_'.join(self.file_name.split('_')[:-1]) + f'_trial-{trial_num:02d}'
+                self.data.save_as = str(path / f'{self.file_name}.edf')
+            self.data.start()  # start recording data
 
         # welcome screen
         self.welcome_screen()
@@ -144,6 +145,10 @@ class Experiment:
             self.trigger(f"Release_{annotation}_{i:02d}")
 
             if pipeline is not None and model is not None:
+                # relax arm block
+                text_relax.draw()
+                image.draw()
+                self.win.flip()
                 self.predict_block(pipeline, model, image_name, text_kwargs)
 
             # relax arm block
@@ -164,7 +169,7 @@ class Experiment:
         # get the relevant data
         emg_data, annotations = self.get_last_gesture_data(pipeline.emg_sample_rate)
         # create a recording object
-        rec = Recording_Emg_Live(emg_data, annotations, pipeline)
+        rec = Recording_Emg_Live(emg_data.T, annotations, pipeline)
         dataset = rec.get_dataset()  # (data, labels)
         predictions = model.classify(dataset[0])
         # majority voting
@@ -178,7 +183,7 @@ class Experiment:
         text = visual.TextStim(self.win, text=text, **text_kwargs)
         text.draw()
         self.win.flip()
-        core.wait(1)
+        core.wait(2)
 
     def get_last_gesture_data(self, sr) -> (np.ndarray, list[(float, float, str)]):
         """Chop the data to the relevant part."""
@@ -186,23 +191,22 @@ class Experiment:
         start_time = annotations[0][0]
         duration = annotations[1][0] - start_time
         start_idx = int((start_time - 5) * sr)
-        emg_data = self.data.exg_data[:, start_idx:]
+        emg_data = self.data.exg_data[start_idx:, :]
         start_time = 5
         end_time = start_time + duration
         annotations = [(start_time, annotations[0][1], annotations[0][2]),
                        (end_time, annotations[1][1], annotations[1][2])]
         return emg_data, annotations
 
-    def save_data(self, data_dir: str = 'data'):
+    def save_data(self):
         """Save the data to a pickle file and to an edf file."""
         if self.data is None:
             pass
         else:
-            os.makedirs(data_dir, exist_ok=True)  # ensure path exists
             # save data to pickle file
             my_dict = {'emg': self.data.exg_data, 'annotations': self.data.annotations}
             my_path = Path(self.data.save_as)
-            with open(my_path.with_suffix('.pickle'), 'wb') as f:
+            with open(my_path.with_suffix('.pkl'), 'wb') as f:
                 pickle.dump(my_dict, f)
 
             # save data to edf file

@@ -661,12 +661,11 @@ class Recording_Emg_Live(Recording_Emg):
                     max_gesture_duration = self.pipeline.max_gesture_duration
                     if start_description != end_description:
                         print(f'Warning: annotation mismatch of {start_description} in time: {annotation[0]}'
-                              f'and {end_description} in time: {annotations[i + 1][0]},'
-                              f' in the experiment: {self.experiment}')
+                              f'and {end_description} in time: {annotations[i + 1][0]}')
                         continue
                     elif annotations[i + 1][0] - annotation[0] > max_gesture_duration:
-                        print(f'Warning: gesture {start_description} in time {annotation[0]} in experiment '
-                              f'{self.experiment} is longer than {max_gesture_duration} seconds, removing it from the '
+                        print(f'Warning: gesture {start_description} in time {annotation[0]} is longer than '
+                              f'{max_gesture_duration} seconds, removing it from the '
                               f'annotations. pls check the annotations in the raw file for further details.')
                     else:
                         # add the gesture number if it doesn't exist in the label, it is either the last word or the
@@ -689,7 +688,7 @@ class Recording_Emg_Live(Recording_Emg):
                                     (annotations[i + 1][0], f'Release_{end_description}_{gest_num}'))
                 else:
                     print(f'Error: annotation mismatch, no Release/End annotation for {start_description} in time: '
-                          f'{annotation[0]}, in the experiment: {self.experiment}')
+                          f'{annotation[0]}')
             else:
                 continue
 
