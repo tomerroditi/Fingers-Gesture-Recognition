@@ -11,7 +11,7 @@ from Source.fgr.utils import train_test_split_by_gesture
 from Source.utils import save_model_and_pipeline
 
 
-subject_num = 1
+subject_num = 2
 position_num = 1
 trial_num = 0
 session_num = 1

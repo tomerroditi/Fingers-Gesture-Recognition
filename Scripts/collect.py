@@ -6,6 +6,7 @@ from Source.fgr.models import Net
 from Source.fgr.utils import train_test_split_by_gesture
 from Source.utils import save_model_and_pipeline
 
+
 subject_num = 1
 position_num = 1
 trial_num = 0
@@ -16,7 +17,7 @@ host_name = "127.0.0.1"  # IP address from which to receive data
 port = 20001  # Local port through which to access host
 data_collector = Data(host_name, port, timeout_secs=30, verbose=False)
 exp = Experiment(subject_num=subject_num, position_num=position_num, session_num=session_num, trial_num=trial_num)
-exp.run(data_collector=data_collector, n_repetitions=n_rep, img_sec=5, instruction_secs=2, relax_sec=0.5)
+exp.run(data_collector=None, n_repetitions=n_rep, img_sec=5, instruction_secs=2, relax_sec=0.5)
 
 # create a dataset for model training
 pipe = Data_Pipeline(emg_sample_rate=250, emg_low_freq=35, emg_high_freq=124)
