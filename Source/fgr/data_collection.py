@@ -2,6 +2,8 @@ import collections
 import os
 import pickle
 import numpy as np
+import sklearn
+import matplotlib.pyplot as plt
 
 from os.path import dirname, join, abspath
 from psychopy import visual, core, event
@@ -88,8 +90,12 @@ class Experiment:
             if self.exit:
                 break
 
-        self.win.close()
-        self.save_data()
+        self.win.close()  # close the window of the experiment
+        self.save_data()  # save the collected data to a pickle file
+        self.data.stop()  # stop recording data, and save an edf file
+
+        if self.predictions:
+            self.plot_predictions_cm()
 
     def trigger(self, msg, verbose: bool = True):
 
@@ -209,5 +215,14 @@ class Experiment:
             with open(my_path.with_suffix('.pkl'), 'wb') as f:
                 pickle.dump(my_dict, f)
 
-            # save data to edf file
-            self.data.save_data()
+    def plot_predictions_cm(self):
+        """Plot the confusion matrix of the predictions and print the accuracy."""
+        true = []
+        pred = []
+        for key, val in self.predictions.items():
+            true.extend([key] * len(val))
+            pred.extend(val)
+        sklearn.metrics.ConfusionMatrixDisplay(sklearn.metrics.confusion_matrix(true, pred),
+                                               display_labels=np.sort(np.unique(true))).plot(cmap='Blues')
+        plt.show()
+        print(f'accuracy: {sklearn.metrics.accuracy_score(true, pred)}')

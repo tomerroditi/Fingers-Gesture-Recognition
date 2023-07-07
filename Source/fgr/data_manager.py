@@ -5,7 +5,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import mne
 
-from hmmlearn import hmm
 from scipy.signal import butter, filtfilt, iirnotch, sosfiltfilt
 from tqdm.auto import tqdm
 from abc import ABC, abstractmethod
@@ -89,49 +88,6 @@ class Data_Manager:
             else:
                 raise e
 
-        return data, labels
-
-    @staticmethod
-    def add_synthetics(data: np.array, labels: np.array, num: int) -> (np.array, np.array):
-        # todo: rename the num parameter to something more meaningful (i don't know what it means)
-        """
-        add synthetic data to the dataset, currently only hmm for feature generation is supported.
-        this function has been removed from the recording object to prevent data leakage!
-        inputs:
-            data: np array of shape (n_samples, n_features)
-            labels: string np array of shape (n_samples) in the format of:
-                    '<experiment name>_<gesture name>_<gesture number>'
-        outputs:
-            data: np array of shape (n+m_samples, n_features)
-            labels: string np array of shape (n+m_samples)
-        """
-        # place holders
-        synthetic_data = np.empty((0, data.shape[1]))
-        generated_labels = np.empty(0, dtype=str)
-        # get labels without number of gesture
-        labels_no_num = np.char.rstrip(labels, '_0123456789')
-        # count how many gestures of each type we have (separate by experiment as well)
-        labels_unique = np.unique(labels_no_num)
-        labels_unique = np.char.rstrip(labels_unique, '_0123456789')
-        labels_counter = collections.Counter(labels_unique)
-        # create the synthetic data using hmm
-        for label in np.unique(labels_no_num):
-            curr_data = data[labels_no_num == label]
-            model = hmm.GaussianHMM(n_components=4, covariance_type="tied", n_iter=10)
-            lengths = [len(curr_data) // num for _ in range(num)]
-            if sum(lengths) == 0:
-                continue
-            model.fit(curr_data[:sum(lengths)], lengths)
-            for j in range(num):
-                mean_num_windows = round(len(curr_data) / labels_counter[label])
-                curr_synthetic_data, _ = model.sample(mean_num_windows)
-                np.concatenate((synthetic_data, curr_synthetic_data), axis=0)
-                curr_labels = np.array([label for _ in range(mean_num_windows)])
-                np.concatenate((generated_labels, curr_labels), axis=0)
-
-        # concatenate the synthetic data to the original data
-        data = np.concatenate((data, synthetic_data), axis=0)
-        labels = np.concatenate((labels, generated_labels), axis=0)
         return data, labels
 
 
@@ -220,10 +176,54 @@ class Subject:
         return data, labels
 
 
-class Base_Recording:
+class Base_Recording(ABC):
 
     def __init__(self, pipeline: Data_Pipeline):
         self.pipeline = pipeline
+
+    @abstractmethod
+    def get_annotated_data(self, data: np.ndarray) -> list[(np.ndarray, str)]:
+        """
+        extract the data that is annotated and its annotation from the raw data. the annotations are not guaranteed to
+        be all the same length so we cant store the data in a single matrix. instead we store it in a list of tuples
+        where each tuple is a segment of the data and its annotation.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_dataset(self) -> (np.array, np.array):
+        raise NotImplementedError
+
+    @abstractmethod
+    def preprocess_data(self) -> None:
+        if self.emg_data is None:
+            self.emg_data, self.emg_times, self.annotations = self._load_raw_data_and_annotations()
+
+        fs = self.pipeline.emg_sample_rate
+        buff_len = fs * self.pipeline.emg_buff_dur
+        if self.pipeline.segmentation_type == "discrete":
+            self.segments, self.labels = self.segment_data_discrete(self.emg_data, self.emg_times, fs,
+                                                                    buff_len=buff_len)
+        elif self.pipeline.segmentation_type == "continuous":
+            raise NotImplementedError("continuous segmentation is not implemented yet")
+        else:
+            raise ValueError("invalid segmentation type")
+
+        self.segments = self._filter_data(self.segments, self.pipeline.emg_sample_rate, self.pipeline.emg_notch_freq,
+                                          self.pipeline.emg_low_freq, self.pipeline.emg_high_freq, buff_len)
+
+        self.segments = self.normalize_data(self.segments, self.pipeline.emg_norm)
+        self.features = self.extract_features(self.segments)
+        self.features = self.normalize_data(self.features, self.pipeline.features_norm)
+        raise NotImplementedError
+
+    @abstractmethod
+    def segment_data_continuous(self) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def segment_data_discrete(self, data: np.ndarray, times: np.ndarray, fs: float):
+        raise NotImplementedError
 
     @staticmethod
     def _filter_data(data: np.ndarray, fs: float, notch: float, low_freq: float, high_freq: float,
@@ -307,6 +307,15 @@ class Base_Recording:
         segments = (emg, acc, gyro)  # (emg, acc, gyro)
         features = feature_extractor.extract_features(segments, **self.pipeline.features_extraction_params)
         return features
+
+    @staticmethod
+    def _plot_segment(segment: np.ndarray) -> None:
+        plt.figure()
+        offset = 400
+        for i in range(segment.shape[0]):
+            data = segment[i, :] + offset * i
+            plt.plot(data, label=f'channel {i + 1}')
+        plt.show()
 
 
 class Recording_Emg(Base_Recording):
@@ -568,7 +577,8 @@ class Recording_Emg(Base_Recording):
         annotated_data = self.get_annotated_data(self.emg_data)
         # create a figure with a subplot for each gesture and its repetitions
         unique_gestures = np.unique([label.split('_')[0] for _, label in annotated_data])
-        fig, axs = plt.subplots(len(unique_gestures), num_repetitions_per_gesture + 1, figsize=(20, 10))
+        fig_size = (2 * (num_repetitions_per_gesture + 1), 2 * len(unique_gestures))
+        fig, axs = plt.subplots(len(unique_gestures), num_repetitions_per_gesture + 1, figsize=fig_size)
         # create s text box for the gesture names in the most left column
         for i, gesture in enumerate(unique_gestures):
             axs[i, 0].text(0.5, 0.5, gesture, fontsize=20, horizontalalignment='center', verticalalignment='center')
@@ -582,7 +592,7 @@ class Recording_Emg(Base_Recording):
             rms = np.sqrt(np.mean(segment ** 2, axis=1)).reshape(4, 4)
             rms /= np.max(rms)  # normalize the rms to be between 0 and 1
             gesture_idx = np.where(unique_gestures == gesture_name)[0][0]
-            axs[gesture_idx, gesture_rep].imshow(rms, cmap='Reds', aspect='auto')
+            axs[gesture_idx, gesture_rep].imshow(rms, cmap='Reds', aspect='equal')
             # remove the axis ticks
             axs[gesture_idx, gesture_rep].set_xticks([])
             axs[gesture_idx, gesture_rep].set_yticks([])
@@ -870,15 +880,6 @@ class Real_Time_Recording(Base_Recording):
         # transpose to match the shape of the preprocessing functions
         # add a dimension to the data to match the input shape of the preprocessing functions
         return self.data_streamer.exg_data[- self.total_len:, :].T[np.newaxis, :, :]
-
-    @staticmethod
-    def _plot_segment(segment: np.ndarray) -> None:
-        plt.figure()
-        for i in range(16):
-            plt.plot(segment[:, i], label=f'channel {i + 1}')
-        plt.legend()
-        plt.ylim(-200, 200)
-        plt.show()
 
 
 ######################################################
