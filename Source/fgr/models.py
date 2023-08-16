@@ -10,6 +10,7 @@ import torch
 import torch.nn.functional as functional
 
 from torch.utils.data import TensorDataset, DataLoader
+from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
 from tqdm import tqdm
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import StratifiedKFold
@@ -210,6 +211,7 @@ class simple_CNN(nn.Module):
         self.loss_vals = {'train': [], 'val': []}  # loss history
         self.accu_vals = {'train': [], 'val': []}
         x_epoch = range(num_epochs)
+        scheduler = StepLR(optimizer, step_size=100, gamma=0.1)
 
         for _ in tqdm(range(num_epochs), desc='training model', unit='epoch'):
             self.float()
@@ -217,6 +219,7 @@ class simple_CNN(nn.Module):
             self._train_loop(train_dataloader, loss_function, optimizer)
             self.eval()
             self._val_loop(val_dataloader, loss_function)
+            scheduler.step()
 
         # create a plot for the loss and accuracy in the training process
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))  # subplot for loss and accuracy
@@ -229,6 +232,7 @@ class simple_CNN(nn.Module):
         if val_dataloader is not None:
             ax1.plot(x_epoch, self.loss_vals['val'], label='val')
             ax2.plot(x_epoch, self.accu_vals['val'], label='val')
+        ax1.legend(), ax2.legend()
         plt.show()
 
         print("Done Training!")
@@ -316,11 +320,11 @@ class Net(simple_CNN):
         super().__init__()
         self.dropout_rate = dropout_rate
 
-        self.conv_1 = nn.Conv2d(1, 2, 2, padding='same')
-        self.batch_norm_1 = nn.BatchNorm2d(2)
-        self.conv_2 = nn.Conv2d(2, 4, 2, padding='same')
-        self.batch_norm_2 = nn.BatchNorm2d(4)
-        self.fc_1 = nn.Linear(4*4*4, 40)  # 4*4 from image dimension, 4 from num of filters
+        self.conv_1 = nn.Conv2d(1, 8, 2, padding='same')
+        self.batch_norm_1 = nn.BatchNorm2d(8)
+        self.conv_2 = nn.Conv2d(8, 16, 2, padding='same')
+        self.batch_norm_2 = nn.BatchNorm2d(16)
+        self.fc_1 = nn.Linear(4*4*16, 40)  # 4*4 from image dimension, 4 from num of filters
         self.batch_norm_3 = nn.BatchNorm1d(40)
         self.fc_2 = nn.Linear(40, 20)
         self.batch_norm_4 = nn.BatchNorm1d(20)
@@ -328,12 +332,15 @@ class Net(simple_CNN):
 
     def forward(self, x):
         # add white gaussian noise to the input only during training
-        if self.training and random.random() < 0:  # % chance to add noise to the batch (adjust to your needs)
-            noise = torch.randn(x.shape) * 0.1 * (float(torch.max(x)) - float(torch.min(x)))  # up to 10% noise
-            # move noise to the same device as x - super important!
-            noise = noise.to(x.device)
-            # add the noise to x
-            x = x + noise
+        # if self.training:
+        #     noise_percentage = 0.2
+        #     random_idx = torch.rand(x.shape[0]) < noise_percentage
+        #     if torch.sum(random_idx) > 0:
+        #         x[random_idx] = x[random_idx] + torch.randn(x[random_idx].shape) * 0.03 * (
+        #                     torch.max(x[random_idx], dim=0)[0] - torch.min(x[random_idx], dim=0)[0])
+        #         noise = torch.randn(x.shape) * 0.05 * (float(torch.max(x)) - float(torch.min(x)))  # up to 5% noise
+        #         noise = noise.to(x.device)
+        #         x = x + noise
         x = self.conv_1(x)
         x = self.batch_norm_1(x)
         x = functional.relu(x)

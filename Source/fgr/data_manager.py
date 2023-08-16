@@ -54,7 +54,7 @@ class Data_Manager:
         print(f'Available experiments in the data manager: {experiments_in_datasets}')
         print('Experiments format is: subject_session_position')
 
-    def get_dataset(self, experiments: str or list) -> (np.array, np.array):
+    def get_dataset(self, experiments: str or list, add_exp_name: bool = True) -> (np.array, np.array):
         """
         extract a dataset of the given experiments from the main database
 
@@ -74,7 +74,7 @@ class Data_Manager:
         for exp in tqdm(experiments_in_datasets, desc='Loading experiments datasets', unit='exp'):  # noqa
             for subject in self.subjects:
                 if subject.get_my_experiments(exp):
-                    datasets.append(subject.get_dataset(exp))
+                    datasets.append(subject.get_dataset(exp, add_exp_name=add_exp_name))
                     break
         print('finished extracting the dataset')
 
@@ -156,12 +156,12 @@ class Subject:
                           any([rec.match_experiment(exp) for exp in experiments])]
         return my_experiments
 
-    def get_dataset(self, experiments: list[str] or str) -> (np.array, np.array):
+    def get_dataset(self, experiments: list[str] or str, add_exp_name: bool = True) -> (np.array, np.array):
         """extract a dataset of the given experiments from the subject"""
         if isinstance(experiments, str):
             experiments = [experiments]
 
-        datasets = [rec.get_dataset() for rec in self.recordings if
+        datasets = [rec.get_dataset(add_exp_name=add_exp_name) for rec in self.recordings if
                     any([rec.match_experiment(exp) for exp in experiments])]
 
         if len(datasets) > 0:
@@ -176,55 +176,7 @@ class Subject:
         return data, labels
 
 
-class Base_Recording(ABC):
-
-    def __init__(self, pipeline: Data_Pipeline):
-        self.pipeline = pipeline
-
-    @abstractmethod
-    def get_annotated_data(self, data: np.ndarray) -> list[(np.ndarray, str)]:
-        """
-        extract the data that is annotated and its annotation from the raw data. the annotations are not guaranteed to
-        be all the same length so we cant store the data in a single matrix. instead we store it in a list of tuples
-        where each tuple is a segment of the data and its annotation.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def get_dataset(self) -> (np.array, np.array):
-        raise NotImplementedError
-
-    @abstractmethod
-    def preprocess_data(self) -> None:
-        if self.emg_data is None:
-            self.emg_data, self.emg_times, self.annotations = self._load_raw_data_and_annotations()
-
-        fs = self.pipeline.emg_sample_rate
-        buff_len = fs * self.pipeline.emg_buff_dur
-        if self.pipeline.segmentation_type == "discrete":
-            self.segments, self.labels = self.segment_data_discrete(self.emg_data, self.emg_times, fs,
-                                                                    buff_len=buff_len)
-        elif self.pipeline.segmentation_type == "continuous":
-            raise NotImplementedError("continuous segmentation is not implemented yet")
-        else:
-            raise ValueError("invalid segmentation type")
-
-        self.segments = self._filter_data(self.segments, self.pipeline.emg_sample_rate, self.pipeline.emg_notch_freq,
-                                          self.pipeline.emg_low_freq, self.pipeline.emg_high_freq, buff_len)
-
-        self.segments = self.normalize_data(self.segments, self.pipeline.emg_norm)
-        self.features = self.extract_features(self.segments)
-        self.features = self.normalize_data(self.features, self.pipeline.features_norm)
-        raise NotImplementedError
-
-    @abstractmethod
-    def segment_data_continuous(self) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def segment_data_discrete(self, data: np.ndarray, times: np.ndarray, fs: float):
-        raise NotImplementedError
-
+class Recording_Preprocessing(ABC):
     @staticmethod
     def _filter_data(data: np.ndarray, fs: float, notch: float, low_freq: float, high_freq: float,
                      buff_len: int = 0) -> np.ndarray:
@@ -302,11 +254,202 @@ class Base_Recording(ABC):
             raise ValueError('Invalid normalization method for EMG data')
         return data
 
-    def extract_features(self, emg: np.ndarray, acc: np.ndarray = None, gyro: np.ndarray = None) -> np.ndarray:
-        feature_extractor = build_feature_extractor(self.pipeline.features_extraction_method)
+    @staticmethod
+    def extract_features(method, kwargs, emg: np.ndarray, acc: np.ndarray = None, gyro: np.ndarray = None) -> \
+            np.ndarray:
+        feature_extractor = build_feature_extractor(method)
         segments = (emg, acc, gyro)  # (emg, acc, gyro)
-        features = feature_extractor.extract_features(segments, **self.pipeline.features_extraction_params)
+        features = feature_extractor.extract_features(segments, **kwargs)
         return features
+
+
+class Base_Recording(Recording_Preprocessing, ABC):
+
+    def __init__(self, pipeline: Data_Pipeline):
+        self.pipeline = pipeline
+        self.emg_data = None
+        self.emg_times = None
+        self.segments = None
+        self.features = None
+        self.labels = None
+        self.annotations = None
+        self.experiment = None
+
+    def _get_verified_annotations(self, annots: list[(float, float, str)]) -> list[(float, str)]:
+        """
+        This function verifies that the annotations are in the right order - start, stop, start, stop, etc.,
+        and that each consecutive start, stop annotations are of the same gesture, where targets are in the format of:
+        Start_<gesture_name>_<number> and Release_<gesture_name>_<number>
+        """
+        annotations = [(onset, description.replace(' ', '_')) for onset, _, description in annots]
+        annotations = [(onset, description) for onset, description in annotations
+                       if any([description.startswith('Start_'), description.startswith('Release_')])]
+
+        # verify that the annotations are in the right order - start, release, start, release, etc.
+        counter = {}
+        verified_annotations = []
+        for i, annotation in enumerate(annotations):
+            if 'Start_' in annotation[1]:
+                start_description = annotation[1].replace('Start_', '')
+                if 'Release_' in annotations[i + 1][1]:
+                    end_description = annotations[i + 1][1].replace('Release_', '')
+                    max_gesture_duration = self.pipeline.max_gesture_duration
+                    if start_description != end_description:
+                        print(f'Warning: annotation mismatch of {start_description} in time: {annotation[0]}'
+                              f'and {end_description} in time: {annotations[i + 1][0]}')
+                        continue
+                    elif annotations[i + 1][0] - annotation[0] > max_gesture_duration:
+                        print(f'Warning: gesture {start_description} in time {annotation[0]} is longer than '
+                              f'{max_gesture_duration} seconds, removing it from the '
+                              f'annotations. pls check the annotations in the raw file for further details.')
+                    else:
+                        verified_annotations.append(annotation)
+                        verified_annotations.append(annotations[i + 1])
+                else:
+                    print(f'Error: annotation mismatch, no Release/End annotation for {start_description} in time: '
+                          f'{annotation[0]}')
+            else:
+                continue
+
+        return verified_annotations
+
+    def get_dataset(self, add_exp_name: bool = False) -> (np.array, np.array):
+        """extract a dataset of the given recording file"""
+        if self.features is None:
+            self.preprocess_data()
+
+        if add_exp_name:
+            labels = np.char.add(f'{self.experiment}_', self.labels)  # add the experiment name to the labels
+        else:
+            labels = self.labels
+
+        return self.features, labels
+
+    def preprocess_data(self) -> None:
+        fs = self.pipeline.emg_sample_rate
+        buff_len = fs * self.pipeline.emg_buff_dur
+        if self.pipeline.segmentation_type == "discrete":
+            self.segments, self.labels = self.segment_data_discrete(self.emg_data, self.emg_times, fs,
+                                                                    buff_len=buff_len)
+        elif self.pipeline.segmentation_type == "continuous":
+            raise NotImplementedError("continuous segmentation is not implemented yet")
+        else:
+            raise ValueError("invalid segmentation type")
+
+        self.segments = self._filter_data(self.segments, self.pipeline.emg_sample_rate, self.pipeline.emg_notch_freq,
+                                          self.pipeline.emg_low_freq, self.pipeline.emg_high_freq, buff_len)
+
+        self.segments = self.normalize_data(self.segments, self.pipeline.emg_norm)
+        self.features = self.extract_features(self.pipeline.features_extraction_method,
+                                              self.pipeline.features_extraction_params,
+                                              emg=self.segments)  # tmp consideration that only emg is used
+        self.features = self.normalize_data(self.features, self.pipeline.features_norm)
+
+    def segment_data_continuous(self) -> None:
+        raise NotImplementedError
+
+    def segment_data_discrete(self, data: np.ndarray, times: np.ndarray, fs: float, buff_len: int = 0) ->\
+            (np.ndarray, np.ndarray):
+        """
+        discrete segmentation of the data according to the annotations.
+
+        Parameters
+        ----------
+        data: np.ndarray
+            the data to segment, should be of shape (n_channels, n_samples)
+        times: np.ndarray
+            the time vector of the data, should be of shape (n_samples,)
+        fs: float
+            the sampling frequency of the data
+        buff_len: int
+            the length of the buffer to add to the segments, in samples
+        """
+        seg_dur = self.pipeline.segment_length_sec
+        step_dur = self.pipeline.segment_step_sec
+        seg_len = floor(seg_dur * fs)
+        step_size = floor(step_dur * fs)
+        start_delay_len = floor(self.pipeline.annotation_delay_start * fs)
+        end_delay_len = floor(self.pipeline.annotation_delay_end * fs)
+
+        segments = []
+        labels = []
+        labels_vector = self._get_time_labels_vector(times)
+        for i in range(max(buff_len, start_delay_len), data.shape[1] - seg_len - end_delay_len, step_size):
+            if not np.all(labels_vector[i:i + seg_len] != 'Idle') or \
+               not np.all(labels_vector[i - start_delay_len: i] != 'Idle') or \
+               not np.all(labels_vector[i + seg_len: i + seg_len + end_delay_len] != 'Idle'):
+                continue
+            segments.append(data[:, i - buff_len: i + seg_len])
+            labels.append(labels_vector[i])  # notice that the number of the gesture is included in the labels!
+
+        return np.stack(segments, axis=0), np.array(labels, dtype=str)
+
+    def _get_time_labels_vector(self, times: np.array) -> np.ndarray:
+        """This function creates a vector of labels for each time stamp to be used in the segmentation process."""
+        if self.annotations is None:
+            raise ValueError('annotations (and likely raw data as well) are not loaded')
+        # create a vector of labels for each time stamp with 'idle' as the default label
+        time_labels = np.full(times.shape, fill_value='Idle', dtype='<U30')
+        for i in range(0, len(self.annotations), 2):
+            desc = self.annotations[i][1].replace('Start_', '')
+            start_time = self.annotations[i][0]
+            end_time = self.annotations[i + 1][0]
+            time_labels[np.logical_and(times >= start_time, times <= end_time)] = desc
+        return time_labels
+
+    def heatmap_visualization(self, num_repetitions_per_gesture: int = 10):
+        annotated_data = self.get_annotated_data(self.emg_data)
+        # create a figure with a subplot for each gesture and its repetitions
+        unique_gestures = np.unique([label.split('_')[0] for _, label in annotated_data])
+        fig_size = (2 * (num_repetitions_per_gesture + 1), 2 * len(unique_gestures))
+        fig, axs = plt.subplots(len(unique_gestures), num_repetitions_per_gesture + 1, figsize=fig_size)
+        # create s text box for the gesture names in the most left column
+        for i, gesture in enumerate(unique_gestures):
+            axs[i, 0].text(0.5, 0.5, gesture, fontsize=20, horizontalalignment='center', verticalalignment='center')
+            axs[i, 0].axis('off')
+        # find the maximum value of the rms of all segments
+        val_max = np.mean([np.max(np.sqrt(np.mean(segment ** 2, axis=1))) for segment, _ in annotated_data])
+        val_min = np.mean([np.min(np.sqrt(np.mean(segment ** 2, axis=1))) for segment, _ in annotated_data])
+        # plot the rms of each segment in the corresponding subplot
+        for i, (segment, label) in enumerate(annotated_data):
+            gesture_name = label.split('_')[0]
+            gesture_rep = int(label.split('_')[-1]) + 1
+            if gesture_rep > num_repetitions_per_gesture:
+                continue
+            rms = np.sqrt(np.mean(segment ** 2, axis=1)).reshape(4, 4)
+            gesture_idx = np.where(unique_gestures == gesture_name)[0][0]
+            # axs[gesture_idx, gesture_rep].imshow(rms, cmap='Reds', aspect='equal', vmin=val_min, vmax=val_max)
+            axs[gesture_idx, gesture_rep].imshow(rms, cmap='Reds', aspect='equal')
+            # remove the axis ticks
+            axs[gesture_idx, gesture_rep].set_xticks([])
+            axs[gesture_idx, gesture_rep].set_yticks([])
+        # remove the white space between the subplots
+        fig.subplots_adjust(wspace=0, hspace=0.1)
+        fig.suptitle(f'{self.experiment} Heatmap Visualization', fontsize=num_repetitions_per_gesture * 5)
+        plt.show()
+
+    def get_annotated_data(self, data: np.ndarray) -> list[(np.ndarray, str)]:
+        """
+        extract the data that is annotated and its annotation from the raw data. the annotations are not guaranteed to
+        be all the same length so we cant store the data in a single matrix. instead we store it in a list of tuples
+        where each tuple is a segment of the data and its annotation.
+        """
+        data_segments = []
+        labels_array = []
+        start_buffer = self.pipeline.annotation_delay_start  # seconds
+        end_buffer = self.pipeline.annotation_delay_end  # seconds
+        for i, annotation in enumerate(self.annotations):
+            time, description = annotation
+            if 'Release_' in description:
+                continue
+            elif 'Start_' in description:
+                start_time = time + start_buffer
+                end_time = self.annotations[i + 1][0] - end_buffer  # the next annotation is the end of the gesture
+                labels_array.append(description.replace('Start_', ''))
+                data_segments.append(data[:, np.logical_and(self.emg_times >= start_time, self.emg_times <= end_time)])
+            else:
+                raise ValueError(f'annotation {description} is not valid, it should contain either Start or Release')
+        return list(zip(data_segments, labels_array))
 
     @staticmethod
     def _plot_segment(segment: np.ndarray) -> None:
@@ -316,6 +459,21 @@ class Base_Recording(ABC):
             data = segment[i, :] + offset * i
             plt.plot(data, label=f'channel {i + 1}')
         plt.show()
+
+    def match_experiment(self, experiment: str) -> bool:
+        """check if the experiment matches the recording experiment"""
+        rec_exp = self.experiment.split('_')
+        curr_exp = experiment.split('_')
+
+        # add zeros in case the subject num is less than 3 digits
+        while len(curr_exp[0]) < 3 and curr_exp[0] != '*':
+            curr_exp[0] = '0' + curr_exp[0]
+
+        if curr_exp[0] == rec_exp[0] or curr_exp[0] == '*':
+            if curr_exp[1] == rec_exp[1] or curr_exp[1] == '*':
+                if curr_exp[2] == rec_exp[2] or curr_exp[2] == '*':
+                    return True
+        return False
 
 
 class Recording_Emg(Base_Recording):
@@ -482,149 +640,10 @@ class Recording_Emg(Base_Recording):
     def preprocess_data(self) -> None:
         if self.emg_data is None:
             self.emg_data, self.emg_times, self.annotations = self._load_raw_data_and_annotations()
-
-        fs = self.pipeline.emg_sample_rate
-        buff_len = fs * self.pipeline.emg_buff_dur
-        if self.pipeline.segmentation_type == "discrete":
-            self.segments, self.labels = self.segment_data_discrete(self.emg_data, self.emg_times, fs,
-                                                                    buff_len=buff_len)
-        elif self.pipeline.segmentation_type == "continuous":
-            raise NotImplementedError("continuous segmentation is not implemented yet")
-        else:
-            raise ValueError("invalid segmentation type")
-
-        self.segments = self._filter_data(self.segments, self.pipeline.emg_sample_rate, self.pipeline.emg_notch_freq,
-                                          self.pipeline.emg_low_freq, self.pipeline.emg_high_freq, buff_len)
-
-        self.segments = self.normalize_data(self.segments, self.pipeline.emg_norm)
-        self.features = self.extract_features(self.segments)
-        self.features = self.normalize_data(self.features, self.pipeline.features_norm)
-
-    def segment_data_discrete(self, data: np.ndarray, times: np.ndarray, fs: float, buff_len: int = 0) ->\
-            (np.ndarray, np.ndarray):
-        """
-        discrete segmentation of the data according to the annotations.
-
-        Parameters
-        ----------
-        data: np.ndarray
-            the data to segment, should be of shape (n_channels, n_samples)
-        fs: float
-            the sampling frequency of the data
-        buff_len: int
-            the length of the buffer to add to the segments, in samples
-        """
-        seg_dur = self.pipeline.segment_length_sec
-        step_dur = self.pipeline.segment_step_sec
-        seg_len = floor(seg_dur * fs)
-        step_size = floor(step_dur * fs)
-        start_delay_len = floor(self.pipeline.annotation_delay_start * fs)
-        end_delay_len = floor(self.pipeline.annotation_delay_end * fs)
-
-        segments = []
-        labels = []
-        labels_vector = self._get_time_labels_vector(times)
-        for i in range(max(buff_len, start_delay_len), data.shape[1] - seg_len - end_delay_len, step_size):
-            if not np.all(labels_vector[i:i + seg_len] != 'Idle') or \
-               not np.all(labels_vector[i - start_delay_len: i] != 'Idle') or \
-               not np.all(labels_vector[i + seg_len: i + seg_len + end_delay_len] != 'Idle'):
-                continue
-            segments.append(data[:, i - buff_len: i + seg_len])
-            labels.append(labels_vector[i])  # notice that the number of the gesture is included in the labels!
-
-        return np.stack(segments, axis=0), np.array(labels, dtype=str)
-
-    def segment_data_continuous(self) -> None:
-        raise NotImplementedError
-
-    def _get_time_labels_vector(self, times: np.array) -> np.ndarray:
-        """This function creates a vector of labels for each time stamp to be used in the segmentation process."""
-        if self.annotations is None:
-            raise ValueError('annotations are not loaded, please load the annotations first with the '
-                             '"_load_raw_data_and_annotations" function.')
-        # create a vector of labels for each time stamp with 'idle' as the default label
-        time_labels = np.full(times.shape, fill_value='Idle', dtype='<U30')
-        for i in range(0, len(self.annotations), 2):
-            desc = self.annotations[i][1].replace('Start_', '')
-            start_time = self.annotations[i][0]
-            end_time = self.annotations[i + 1][0]
-            time_labels[np.logical_and(times >= start_time, times <= end_time)] = desc
-        return time_labels
-
-    def get_dataset(self) -> (np.array, np.array):
-        """extract a dataset of the given recording file"""
-        if self.features is None:
-            self.preprocess_data()
-        labels = np.char.add(f'{self.experiment}_', self.labels)  # add the experiment name to the labels
-        return self.features, labels
-
-    def match_experiment(self, experiment: str) -> bool:
-        """check if the experiment matches the recording file"""
-        rec_exp = self.experiment.split('_')
-        curr_exp = experiment.split('_')
-
-        # add zeros in case the subject num is less than 3 digits
-        while len(curr_exp[0]) < 3 and curr_exp[0] != '*':
-            curr_exp[0] = '0' + curr_exp[0]
-
-        if curr_exp[0] == rec_exp[0] or curr_exp[0] == '*':
-            if curr_exp[1] == rec_exp[1] or curr_exp[1] == '*':
-                if curr_exp[2] == rec_exp[2] or curr_exp[2] == '*':
-                    return True
-        return False
-
-    def heatmap_visualization(self, num_repetitions_per_gesture: int):
-        annotated_data = self.get_annotated_data(self.emg_data)
-        # create a figure with a subplot for each gesture and its repetitions
-        unique_gestures = np.unique([label.split('_')[0] for _, label in annotated_data])
-        fig_size = (2 * (num_repetitions_per_gesture + 1), 2 * len(unique_gestures))
-        fig, axs = plt.subplots(len(unique_gestures), num_repetitions_per_gesture + 1, figsize=fig_size)
-        # create s text box for the gesture names in the most left column
-        for i, gesture in enumerate(unique_gestures):
-            axs[i, 0].text(0.5, 0.5, gesture, fontsize=20, horizontalalignment='center', verticalalignment='center')
-            axs[i, 0].axis('off')
-        # plot the rms of each segment in the corresponding subplot
-        for i, (segment, label) in enumerate(annotated_data):
-            gesture_name = label.split('_')[0]
-            gesture_rep = int(label.split('_')[1]) + 1
-            if gesture_rep > num_repetitions_per_gesture:
-                continue
-            rms = np.sqrt(np.mean(segment ** 2, axis=1)).reshape(4, 4)
-            rms /= np.max(rms)  # normalize the rms to be between 0 and 1
-            gesture_idx = np.where(unique_gestures == gesture_name)[0][0]
-            axs[gesture_idx, gesture_rep].imshow(rms, cmap='Reds', aspect='equal')
-            # remove the axis ticks
-            axs[gesture_idx, gesture_rep].set_xticks([])
-            axs[gesture_idx, gesture_rep].set_yticks([])
-        # remove the white space between the subplots
-        fig.subplots_adjust(wspace=0, hspace=0.1)
-        plt.show()
-
-    def get_annotated_data(self, data: np.ndarray) -> list[(np.ndarray, str)]:
-        """
-        extract the data that is annotated and its annotation from the raw data. the annotations are not guaranteed to
-        be all the same length so we cant store the data in a single matrix. instead we store it in a list of tuples
-        where each tuple is a segment of the data and its annotation.
-        """
-        data_segments = []
-        labels_array = []
-        start_buffer = self.pipeline.annotation_delay_start  # seconds
-        end_buffer = self.pipeline.annotation_delay_end  # seconds
-        for i, annotation in enumerate(self.annotations):
-            time, description = annotation
-            if 'Release_' in description:
-                continue
-            elif 'Start_' in description:
-                start_time = time + start_buffer
-                end_time = self.annotations[i + 1][0] - end_buffer  # the next annotation is the end of the gesture
-                labels_array.append(description.replace('Start_', ''))
-                data_segments.append(data[:, np.logical_and(self.emg_times >= start_time, self.emg_times <= end_time)])
-            else:
-                raise ValueError(f'annotation {description} is not valid, it should contain either Start or Release')
-        return list(zip(data_segments, labels_array))
+        super().preprocess_data()
 
 
-class Recording_Emg_Live(Recording_Emg):
+class Recording_Emg_Live(Base_Recording):
     emg_chan_order_1 = ['EMG Ch-1', 'EMG Ch-2', 'EMG Ch-3', 'EMG Ch-4', 'EMG Ch-5', 'EMG Ch-6', 'EMG Ch-7', 'EMG Ch-8',
                         'EMG Ch-9', 'EMG Ch-10', 'EMG Ch-11', 'EMG Ch-12', 'EMG Ch-13', 'EMG Ch-14', 'EMG Ch-15',
                         'EMG Ch-16']
@@ -637,107 +656,10 @@ class Recording_Emg_Live(Recording_Emg):
         self.emg_data: np.ndarray = emg_data  # emg data, shape: (n_channels, n_samples)
         self.emg_times: np.ndarray = np.linspace(0, len(emg_data[0]) / pipeline.emg_sample_rate, len(emg_data[0]))  # time stamps of the emg data (seconds)
         self.annotations: list[(float, str)] = self._get_verified_annotations(annots)  # (time onset (seconds), description) pairs
+        self.experiment: str = '_'.join(self.annotations[0][1].split('_')[2:-1])  # name of the experiment
         self.segments: np.ndarray or None = None  # EMG segments, shape: (n_segments, n_channels, n_samples)
         self.labels: np.ndarray or None = None  # labels of the segments, shape: (n_segments,)
         self.features: np.ndarray or None = None  # features of the segments, shape: (n_segments, *features_dims)
-
-    def _get_verified_annotations(self, annots: list[(float, float, str)]) -> list[(float, str)]:
-        """
-        This function verifies that the annotations are in the right order - start, stop, start, stop, etc.,
-        and that each consecutive start, stop annotations are of the same gesture, where targets are in the format of:
-        Start_<gesture_name>_<number> and Release_<gesture_name>_<number>
-        """
-        annotations = [(onset, description) for onset, _, description in annots
-                       if 'Start' in description or 'Release' in description or 'End' in description]
-        # reject unwanted annotations - keep only gesture related ones
-        gesture_annotations = []
-        for onset, description in annotations:
-            if description == 'Recording_Emg_Acc Started' or \
-                    description == 'Start Experiment' or \
-                    description == 'App End Recording_Emg_Acc':
-                continue
-            else:
-                gesture_annotations.append((onset, description))
-        annotations = gesture_annotations
-        # verify that the annotations are in the right order - start, stop, start, stop, etc.
-        counter = {}
-        verified_annotations = []
-        for i, annotation in enumerate(annotations):
-            if 'Start' in annotation[1]:
-                start_description = annotation[1].replace('Start', '').strip('_ ').replace('_', ' ')
-                if 'Release' in annotations[i + 1][1] or 'End' in annotations[i + 1][1]:
-                    end_description = annotations[i + 1][1].replace('Release', '').replace('End', '').strip('_ ').\
-                        replace('_', ' ')
-                    max_gesture_duration = self.pipeline.max_gesture_duration
-                    if start_description != end_description:
-                        print(f'Warning: annotation mismatch of {start_description} in time: {annotation[0]}'
-                              f'and {end_description} in time: {annotations[i + 1][0]}')
-                        continue
-                    elif annotations[i + 1][0] - annotation[0] > max_gesture_duration:
-                        print(f'Warning: gesture {start_description} in time {annotation[0]} is longer than '
-                              f'{max_gesture_duration} seconds, removing it from the '
-                              f'annotations. pls check the annotations in the raw file for further details.')
-                    else:
-                        # add the gesture number if it doesn't exist in the label, it is either the last word or the
-                        # last
-                        # word after '_' (offline and online formats)
-                        if start_description.split(' ')[-1].isdigit():
-                            num_gest = int(start_description.split(' ')[-1])
-                            counter[start_description] = num_gest if num_gest > counter.get(start_description, 0) else \
-                                counter.get(start_description, 0)
-                            start_description = start_description.split(' ')[0]  # remove the digit
-                            end_description = end_description.split(' ')[0]  # remove the digit
-                            verified_annotations.append((annotation[0], f'Start_{start_description}_{num_gest}'))
-                            verified_annotations.append(
-                                    (annotations[i + 1][0], f'Release_{end_description}_{num_gest}'))
-                        else:
-                            gest_num = counter.get(start_description, -1) + 1
-                            counter[start_description] = gest_num
-                            verified_annotations.append((annotation[0], f'Start_{start_description}_{gest_num}'))
-                            verified_annotations.append(
-                                    (annotations[i + 1][0], f'Release_{end_description}_{gest_num}'))
-                else:
-                    print(f'Error: annotation mismatch, no Release/End annotation for {start_description} in time: '
-                          f'{annotation[0]}')
-            else:
-                continue
-
-        # remove bad annotations - if we have the same gesture in two annotations remove the first one
-        good_annotations = []
-        annotations_description = [annotation[1] for annotation in verified_annotations]
-        for i, annotation in enumerate(verified_annotations):
-            if annotation[1] not in annotations_description[i + 1:]:
-                good_annotations.append(annotation)
-            else:
-                print(f'Warning: annotation {annotation[1]} in time {annotation[0]} in experiment '
-                      f'{self.experiment} is a duplicate, removing it from the annotations. pls check the annotations'
-                      f' in the raw files for further details.')
-
-        return good_annotations
-
-    def preprocess_data(self) -> None:
-        fs = self.pipeline.emg_sample_rate
-        buff_len = fs * self.pipeline.emg_buff_dur
-        if self.pipeline.segmentation_type == "discrete":
-            self.segments, self.labels = self.segment_data_discrete(self.emg_data, self.emg_times, fs,
-                                                                    buff_len=buff_len)
-        elif self.pipeline.segmentation_type == "continuous":
-            raise NotImplementedError("continuous segmentation is not implemented yet")
-        else:
-            raise ValueError("invalid segmentation type")
-
-        self.segments = self._filter_data(self.segments, self.pipeline.emg_sample_rate, self.pipeline.emg_notch_freq,
-                                          self.pipeline.emg_low_freq, self.pipeline.emg_high_freq, buff_len)
-
-        self.segments = self.normalize_data(self.segments, self.pipeline.emg_norm)
-        self.features = self.extract_features(self.segments)
-        self.features = self.normalize_data(self.features, self.pipeline.features_norm)
-
-    def get_dataset(self) -> (np.array, np.array):
-        """extract a dataset of the given recording file"""
-        if self.features is None:
-            self.preprocess_data()
-        return self.features, self.labels
 
 
 class Recording_Emg_Acc(Recording_Emg):
