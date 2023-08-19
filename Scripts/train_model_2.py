@@ -1,6 +1,14 @@
-"""This script is used to train a model out of saved data files"""
+"""
+This script is used to train a model out of recordings which are saved as pickle files (new online recordings).
+To create this kind of files you may use the "collect" script.
+
+Note
+----
+This scripts uses seperated train and test trials files to form the train and test datasets. this is a better way to
+evaluate the model performance in real world scenarios. the "train_model.py" script uses the same file for both train
+and test datasets.
+"""
 import pickle
-import numpy as np
 
 from pathlib import Path
 from Source.fgr.data_manager import Recording_Emg_Live
@@ -14,7 +22,6 @@ position_num = 1
 session_num = 1
 train_trial_num = 0
 test_trial_num = 1
-
 
 # load the data
 path = Path().cwd().parent / 'data'
@@ -45,14 +52,6 @@ data_train, labels_train = rec_train.get_dataset()
 data_test, labels_test = rec_test.get_dataset()
 data_train, data_val, labels_train, labels_val = train_test_split_by_gesture(data_train, labels=labels_train,
                                                                              test_size=0.2)
-# data_test_0, data_test, labels_test_0, labels_test = train_test_split_by_gesture(data_test, labels=labels_test,
-#                                                                                         test_size=0.6)
-#
-# data_train = np.concatenate([data_train, data_test_0], axis=0)
-# labels_train = np.concatenate([labels_train, labels_test_0], axis=0)
-
-# rec_train.heatmap_visualization(10)
-# rec_test.heatmap_visualization(5)
 
 model = Net(num_classes=10 - len(discard), dropout_rate=0.4)
 model.fit_model(data_train, labels_train, data_val, labels_val,  num_epochs=200, batch_size=64, lr=0.001,

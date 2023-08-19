@@ -58,9 +58,13 @@ class Data_Manager:
         """
         extract a dataset of the given experiments from the main database
 
-        experiments: list of strings in the template of 'subject_session_position' use * in one of the fields to
-        indicate all. e.g. ['001_1_*', '002_*_*', '003_*_1']
-        include_synthetics: boolean, declare inclusion of synthetic data in the dataset
+        Parameters
+        ----------
+        experiments : str or list.
+            list of strings (of experiments names) in the template of 'subject_session_position' use * in one of the
+            fields to indicate all. e.g. ['001_1_*', '002_*_*', '003_*_1'].
+        add_exp_name : bool
+            whether to add the experiment name to the labels or not.
         """
         if isinstance(experiments, str):
             experiments = [experiments]
@@ -476,6 +480,25 @@ class Base_Recording(Recording_Preprocessing, ABC):
         return False
 
 
+class Recording_Emg_Live(Base_Recording):
+    emg_chan_order_1 = ['EMG Ch-1', 'EMG Ch-2', 'EMG Ch-3', 'EMG Ch-4', 'EMG Ch-5', 'EMG Ch-6', 'EMG Ch-7', 'EMG Ch-8',
+                        'EMG Ch-9', 'EMG Ch-10', 'EMG Ch-11', 'EMG Ch-12', 'EMG Ch-13', 'EMG Ch-14', 'EMG Ch-15',
+                        'EMG Ch-16']
+    emg_chan_order_2 = ['Channel 0', 'Channel 1', 'Channel 2', 'Channel 3', 'Channel 4', 'Channel 5', 'Channel 6',
+                        'Channel 7', 'Channel 8', 'Channel 9', 'Channel 10', 'Channel 11', 'Channel 12', 'Channel 13',
+                        'Channel 14', 'Channel 15']
+
+    def __init__(self, emg_data: np.array, annots: list[(float, float, str)], pipeline: Data_Pipeline):
+        self.pipeline: Data_Pipeline = pipeline  # stores all preprocessing parameters
+        self.emg_data: np.ndarray = emg_data  # emg data, shape: (n_channels, n_samples)
+        self.emg_times: np.ndarray = np.linspace(0, len(emg_data[0]) / pipeline.emg_sample_rate, len(emg_data[0]))  # time stamps of the emg data (seconds)
+        self.annotations: list[(float, str)] = self._get_verified_annotations(annots)  # (time onset (seconds), description) pairs
+        self.experiment: str = '_'.join(self.annotations[0][1].split('_')[2:-1])  # name of the experiment
+        self.segments: np.ndarray or None = None  # EMG segments, shape: (n_segments, n_channels, n_samples)
+        self.labels: np.ndarray or None = None  # labels of the segments, shape: (n_segments,)
+        self.features: np.ndarray or None = None  # features of the segments, shape: (n_segments, *features_dims)
+
+
 class Recording_Emg(Base_Recording):
     emg_chan_order_1 = ['EMG Ch-1', 'EMG Ch-2', 'EMG Ch-3', 'EMG Ch-4', 'EMG Ch-5', 'EMG Ch-6', 'EMG Ch-7', 'EMG Ch-8',
                         'EMG Ch-9', 'EMG Ch-10', 'EMG Ch-11', 'EMG Ch-12', 'EMG Ch-13', 'EMG Ch-14', 'EMG Ch-15',
@@ -641,25 +664,6 @@ class Recording_Emg(Base_Recording):
         if self.emg_data is None:
             self.emg_data, self.emg_times, self.annotations = self._load_raw_data_and_annotations()
         super().preprocess_data()
-
-
-class Recording_Emg_Live(Base_Recording):
-    emg_chan_order_1 = ['EMG Ch-1', 'EMG Ch-2', 'EMG Ch-3', 'EMG Ch-4', 'EMG Ch-5', 'EMG Ch-6', 'EMG Ch-7', 'EMG Ch-8',
-                        'EMG Ch-9', 'EMG Ch-10', 'EMG Ch-11', 'EMG Ch-12', 'EMG Ch-13', 'EMG Ch-14', 'EMG Ch-15',
-                        'EMG Ch-16']
-    emg_chan_order_2 = ['Channel 0', 'Channel 1', 'Channel 2', 'Channel 3', 'Channel 4', 'Channel 5', 'Channel 6',
-                        'Channel 7', 'Channel 8', 'Channel 9', 'Channel 10', 'Channel 11', 'Channel 12', 'Channel 13',
-                        'Channel 14', 'Channel 15']
-
-    def __init__(self, emg_data: np.array, annots: list[(float, float, str)], pipeline: Data_Pipeline):
-        self.pipeline: Data_Pipeline = pipeline  # stores all preprocessing parameters
-        self.emg_data: np.ndarray = emg_data  # emg data, shape: (n_channels, n_samples)
-        self.emg_times: np.ndarray = np.linspace(0, len(emg_data[0]) / pipeline.emg_sample_rate, len(emg_data[0]))  # time stamps of the emg data (seconds)
-        self.annotations: list[(float, str)] = self._get_verified_annotations(annots)  # (time onset (seconds), description) pairs
-        self.experiment: str = '_'.join(self.annotations[0][1].split('_')[2:-1])  # name of the experiment
-        self.segments: np.ndarray or None = None  # EMG segments, shape: (n_segments, n_channels, n_samples)
-        self.labels: np.ndarray or None = None  # labels of the segments, shape: (n_segments,)
-        self.features: np.ndarray or None = None  # features of the segments, shape: (n_segments, *features_dims)
 
 
 class Recording_Emg_Acc(Recording_Emg):

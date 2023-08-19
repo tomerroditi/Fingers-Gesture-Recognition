@@ -1,37 +1,12 @@
-# import numpy as np
-# import torch
-# import Source.fgr.models as models
-#
-# from Source.fgr.pipelines import Data_Pipeline
-# from Source.fgr.data_manager import Data_Manager
-# from warnings import simplefilter
-# from pathlib import Path
-# from importlib import reload
-#
-# # pipeline definition and data manager creation
-# data_path = Path(r'I:/My Drive/finger gesture recognition/')
-# pipeline = Data_Pipeline(base_data_files_path=data_path)  # configure the data pipeline you would like to use (check pipelines module for more info)
-# subject = 1
-# dm = Data_Manager([subject], pipeline)
-# print(dm.data_info())
-#
-# dm.get_dataset(experiments=[f'{subject:03d}_*_*'])
-# for subj in dm.subjects:
-#     for rec in subj.recordings:
-#         if rec.emg_data is not None:
-#             rec.heatmap_visualization(10)
-
-
-"""This script is used to train a model out of saved data files"""
+"""
+This script is used to extract heat maps from recordings which are saved as pickle files (new online recordings).
+To create this kind of files you may use the "collect" script.
+"""
 import pickle
-import numpy as np
 
 from pathlib import Path
 from Source.fgr.data_manager import Recording_Emg_Live
-from Source.fgr.utils import train_test_split_by_gesture
 from Source.fgr.pipelines import Data_Pipeline
-from Source.fgr.models import Net
-from Source.utils import save_model_and_pipeline
 
 subject_num = 2
 position_num = 1

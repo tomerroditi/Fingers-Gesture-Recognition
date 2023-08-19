@@ -1,3 +1,10 @@
+"""
+This script gathers data to train a model, and then evaluates it on a live experiment.
+it is a combination of the collect.py and post_collect.py scripts.
+"""
+import sklearn
+import matplotlib.pyplot as plt
+
 from Source.fgr.data_manager import Recording_Emg_Live
 from Source.streamer.data import Data
 from Source.fgr.data_collection import Experiment
@@ -40,3 +47,13 @@ del data_collector  # delete the data collector to reset the data stream
 data_collector = Data(host_name, port, timeout_secs=30, verbose=False)
 exp = Experiment(subject_num=subject_num, position_num=position_num, session_num=session_num, trial_num=trial_num + 1)
 exp.run(data_collector=data_collector, pipeline=pipe, model=model, n_repetitions=n_rep, img_sec=5, instruction_secs=2, relax_sec=0.5 )
+
+# confusion matrix
+true = []
+pred = []
+for key, val in exp.predictions.items():
+    true.extend([key] * len(val))
+    pred.extend(val)
+sklearn.metrics.ConfusionMatrixDisplay(sklearn.metrics.confusion_matrix(true, pred), display_labels=np.sort(np.unique(true))).plot(cmap='Blues')
+plt.show()
+print(f'accuracy: {sklearn.metrics.accuracy_score(true, pred)}')

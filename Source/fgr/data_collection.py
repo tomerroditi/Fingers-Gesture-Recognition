@@ -63,9 +63,9 @@ class Experiment:
         relax_sec : float, optional
             Number of seconds to relax between gestures. The default is 0.5.
         pipeline : Data_Pipeline, optional
-            a data preprocessing pipeline. The default is None.
+            a data preprocessing pipeline. The default is None. used for testing a model.
         model : torch.nn.Module, optional
-            a trained model. The default is None.
+            a trained model. The default is None. used for testing a model.
         """
         self.data = data_collector
         if self.data is not None:  # set a path to the save data in case we are recording

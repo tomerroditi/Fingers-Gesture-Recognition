@@ -1,3 +1,7 @@
+"""
+This script demonstrates how to use the real time predictor.
+"""
+
 import torch
 import time
 import matplotlib.pyplot as plt
