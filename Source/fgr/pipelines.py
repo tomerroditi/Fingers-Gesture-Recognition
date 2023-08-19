@@ -33,7 +33,7 @@ class Data_Pipeline:
 
 
 @dataclass
-class Model_Pipeline:
+class Model_Pipeline:  # currently unused
     """this class is a dataclass that holds the parameters for model training"""
     # TODO: refactor this class for a more convenient way to use it
     def __init__(self, model: str, model_params: dict, train_params: dict):

@@ -1,4 +1,7 @@
-"""This script is used to train a model out of saved data files"""
+"""
+This script is used to train a model out of recordings which are saved as pickle files (new online recordings).
+To create this kind of files you may use the "collect" script.
+"""
 import pickle
 
 from pathlib import Path

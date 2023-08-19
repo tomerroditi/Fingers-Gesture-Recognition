@@ -1,4 +1,13 @@
-import os.path
+"""
+This script is used to live test a model performance on a subject.
+It is using a trained model to predict the labels of the gestures that are presented to the subject.
+it saves the recorded data as pickle files (new online recordings) and as edf files.
+
+you may modify the parameters at the beginning of the script to your needs.
+subject_num, position_num, session_num, trial_num - determines the saved file name and location.
+model_num - each subject has several models, this parameter determines which model to use.
+"""
+
 import torch
 import sklearn
 import numpy as np
@@ -11,8 +20,8 @@ from Source.fgr.data_collection import Experiment
 
 subject_num = 1
 position_num = 1
-trial_num = 0
 session_num = 1
+trial_num = 0
 n_rep = 1
 model_num = 3
 
