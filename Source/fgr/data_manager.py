@@ -6,13 +6,15 @@ import matplotlib.pyplot as plt
 import mne
 
 from hmmlearn import hmm
-from scipy.signal import butter, filtfilt, iirnotch, sosfiltfilt
+from scipy.signal import butter, filtfilt, iirnotch, sosfiltfilt, stft
 from tqdm.auto import tqdm
 from abc import ABC, abstractmethod
 from pathlib import Path
 from math import floor
 from typing import TypeVar
 from Source.streamer.data import Data
+
+import pywt
 
 Data_Pipeline = TypeVar("Data_Pipeline")
 mne.set_log_level('WARNING')  # disable mne function's printing except warnings
@@ -764,6 +766,7 @@ class Feature_Extractor(ABC):
         pass
 
 
+
 class RMS_Feature_Extractor(Feature_Extractor):
     def extract_features(self, segments: (np.array, np.array, np.array), output_shape: tuple = (1, 4, 4)) -> np.array:
         """
@@ -786,9 +789,60 @@ class RMS_Feature_Extractor(Feature_Extractor):
         features = rms.reshape(emg_data.shape[0], *output_shape)  # reshape to the desired output shape
         return features
 
+class H_Wavelet_Feature_Extractor(Feature_Extractor):
+    def extract_features(self, segments: (np.array, np.array, np.array), output_shape: tuple = (1, 4, 4),  frame=500, step=200) -> np.array:
+        """
+        extract the RMS of each emg channel and reshape into a 4x4 array.
 
+        Parameters
+        ----------
+        segments: tuple of (emg_segments, acc_segments, gyro_segments). for more info check the docstring of the
+                    extract_features method in Feature_Extractor class.
+        output_shape: tuple
+            the desired output shape of the features, default: (1, 4, 4)
+
+        Returns
+        -------
+        features: np.array
+            the extracted features, shape: (num_segments, 4, 4)
+        """
+        emg_data, _, _ = segments
+        h_wavelet_total = []
+        emg_data = emg_data.reshape(emg_data.shape[0],-1)
+        for j in range(emg_data.shape[1]):
+            segment = emg_data[:, j]
+            h_wavelet = []
+            for i in range(frame, segment.size, step):
+                x = emg_data[i - frame:i]
+
+                E_a, E = self.wavelet_energy(x, 'db2', 4)
+                E.insert(0, E_a)
+                E = np.asarray(E) / 100
+
+                h_wavelet.append(-np.sum(E * np.log2(E)))
+            h_wavelet_total.append(h_wavelet)
+        h_wavelet_total = np.asarray(h_wavelet_total)
+        features = h_wavelet_total.reshape(emg_data.shape[1], *output_shape)  # reshape to the desired output shape
+        return features
+    
+    def wavelet_energy(self, x, mother, nivel):
+        coeffs = pywt.wavedecn(x, wavelet=mother, level=nivel)
+        arr, _ = pywt.coeffs_to_array(coeffs)
+        Et = np.sum(arr ** 2)
+        cA = coeffs[0]
+        Ea = 100 * np.sum(cA ** 2) / Et
+        Ed = []
+
+        for k in range(1, len(coeffs)):
+            cD = list(coeffs[k].values())
+            cD = np.asarray(cD)
+            Ed.append(100 * np.sum(cD ** 2) / Et)
+
+        return Ea, Ed
+    
 """Builder"""
-extractors = {"RMS": RMS_Feature_Extractor()}
+extractors = {"RMS": RMS_Feature_Extractor(),
+              "H_Wavelet": H_Wavelet_Feature_Extractor()}
 
 
 def build_feature_extractor(method: str) -> Feature_Extractor:

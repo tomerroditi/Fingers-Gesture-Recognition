@@ -5,7 +5,7 @@ setup(
     version='1.0',
     author='Tomer Roditi, Gal Babayof, Aaron Gerston (X-trodes LTD)',
     author_email='aarong@xtrodes.com, tomerroditi1@gmail.com',
-    packages=['fgr', 'streamer'],
+    packages=['Source/fgr', 'Source/streamer'],
     include_package_data=True,
     license='GNU GPLv3',
     long_description=open('readme.md').read(),
