@@ -549,7 +549,7 @@ class Recording_Emg(Base_Recording):
         if self.features is None:
             self.preprocess_data()
         labels = np.char.add(f'{self.experiment}_', self.labels)  # add the experiment name to the labels
-        return self.features, labels
+        return self.segments, labels
 
     def match_experiment(self, experiment: str) -> bool:
         """check if the experiment matches the recording file"""
@@ -806,37 +806,27 @@ class H_Wavelet_Feature_Extractor(Feature_Extractor):
         features: np.array
             the extracted features, shape: (num_segments, 4, 4)
         """
-        emg_data, _, _ = segments
-        h_wavelet_total = []
-        emg_data = emg_data.reshape(emg_data.shape[0],-1)
-        for j in range(emg_data.shape[1]):
-            segment = emg_data[:, j]
-            h_wavelet = []
-            for i in range(frame, segment.size, step):
-                x = emg_data[i - frame:i]
-
-                E_a, E = self.wavelet_energy(x, 'db2', 4)
-                E.insert(0, E_a)
-                E = np.asarray(E) / 100
-
-                h_wavelet.append(-np.sum(E * np.log2(E)))
-            h_wavelet_total.append(h_wavelet)
-        h_wavelet_total = np.asarray(h_wavelet_total)
-        features = h_wavelet_total.reshape(emg_data.shape[1], *output_shape)  # reshape to the desired output shape
+        E_a, E = self.wavelet_energy(self,segments, 'db2', 4)
+        E.insert(0, E_a)
+        E = np.asarray(E) / 100
+        h_wave =  -np.sum(E * np.log2(E), axis=0)  
+        features = h_wave.reshape(segments.shape[0], *output_shape)  # reshape to the desired output shape
         return features
     
-    def wavelet_energy(self, x, mother, nivel):
-        coeffs = pywt.wavedecn(x, wavelet=mother, level=nivel)
-        arr, _ = pywt.coeffs_to_array(coeffs)
-        Et = np.sum(arr ** 2)
+    def wavelet_energy( self, x, mother, nivel):
+        coeffs = pywt.wavedecn(x, wavelet=mother, level=nivel, axes=[2])
+        arr, _ = pywt.coeffs_to_array(coeffs, axes=[2])
+        Et = np.sum(arr ** 2, axis=2)
         cA = coeffs[0]
-        Ea = 100 * np.sum(cA ** 2) / Et
+        Ea = 100 * np.sum(cA ** 2, axis=2) / Et
         Ed = []
 
         for k in range(1, len(coeffs)):
+            
             cD = list(coeffs[k].values())
-            cD = np.asarray(cD)
-            Ed.append(100 * np.sum(cD ** 2) / Et)
+            cD = np.asarray(cD).squeeze(0)
+
+            Ed.append(100 * np.sum(cD ** 2, axis=2) / Et)
 
         return Ea, Ed
         
