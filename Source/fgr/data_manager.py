@@ -839,7 +839,7 @@ class H_Wavelet_Feature_Extractor(Feature_Extractor):
             Ed.append(100 * np.sum(cD ** 2) / Et)
 
         return Ea, Ed
-    
+        
 """Builder"""
 extractors = {"RMS": RMS_Feature_Extractor(),
               "H_Wavelet": H_Wavelet_Feature_Extractor()}
