@@ -549,7 +549,7 @@ class Recording_Emg(Base_Recording):
         if self.features is None:
             self.preprocess_data()
         labels = np.char.add(f'{self.experiment}_', self.labels)  # add the experiment name to the labels
-        return self.segments, labels
+        return self.features, labels
 
     def match_experiment(self, experiment: str) -> bool:
         """check if the experiment matches the recording file"""
@@ -806,11 +806,13 @@ class H_Wavelet_Feature_Extractor(Feature_Extractor):
         features: np.array
             the extracted features, shape: (num_segments, 4, 4)
         """
-        E_a, E = self.wavelet_energy(self,segments, 'db2', 4)
+        emg_data, _, _ = segments
+
+        E_a, E = self.wavelet_energy(emg_data, 'db2', 4)
         E.insert(0, E_a)
         E = np.asarray(E) / 100
         h_wave =  -np.sum(E * np.log2(E), axis=0)  
-        features = h_wave.reshape(segments.shape[0], *output_shape)  # reshape to the desired output shape
+        features = h_wave.reshape(emg_data.shape[0], *output_shape)  # reshape to the desired output shape
         return features
     
     def wavelet_energy( self, x, mother, nivel):
