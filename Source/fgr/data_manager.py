@@ -549,7 +549,7 @@ class Recording_Emg(Base_Recording):
         if self.features is None:
             self.preprocess_data()
         labels = np.char.add(f'{self.experiment}_', self.labels)  # add the experiment name to the labels
-        return self.features, labels
+        return self.segments, labels
 
     def match_experiment(self, experiment: str) -> bool:
         """check if the experiment matches the recording file"""
