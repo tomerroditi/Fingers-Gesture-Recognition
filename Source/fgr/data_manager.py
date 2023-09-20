@@ -490,8 +490,8 @@ class Recording_Emg(Base_Recording):
                                           self.pipeline.emg_low_freq, self.pipeline.emg_high_freq, buff_len)
 
         self.segments = self.normalize_data(self.segments, self.pipeline.emg_norm)
-        self.features = self.extract_features(self.segments)
-        self.features = self.normalize_data(self.features, self.pipeline.features_norm)
+        # self.features = self.extract_features(self.segments)
+        # self.features = self.normalize_data(self.features, self.pipeline.features_norm)
 
     def segment_data_discrete(self, data: np.ndarray, times: np.ndarray, fs: float, buff_len: int = 0) ->\
             (np.ndarray, np.ndarray):
